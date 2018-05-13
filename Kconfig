@@ -8,5 +8,10 @@ config SRCARCH
 	string
 	option env="SRCARCH"
 
+config VENDOR_SMARTISAN
+	bool "SMARTISAN support"
+	help
+	  This feature enables Smartisan specific hacks
+
 source "arch/$SRCARCH/Kconfig"
 source "techpack/audio/Kconfig"
