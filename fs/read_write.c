@@ -4,7 +4,7 @@
  *  Copyright (C) 1991, 1992  Linus Torvalds
  */
 
-#include <linux/slab.h> 
+#include <linux/slab.h>
 #include <linux/stat.h>
 #include <linux/fcntl.h>
 #include <linux/file.h>
@@ -22,6 +22,9 @@
 
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
+
+#define CREATE_TRACE_POINTS
+#include <trace/events/fsdbg.h>
 
 typedef ssize_t (*io_fn_t)(struct file *, char __user *, size_t, loff_t *);
 typedef ssize_t (*iter_fn_t)(struct kiocb *, struct iov_iter *);
@@ -66,6 +69,122 @@ loff_t vfs_setpos(struct file *file, loff_t offset, loff_t maxsize)
 	return offset;
 }
 EXPORT_SYMBOL(vfs_setpos);
+
+enum {
+	FUNC_READ = 0,
+	FUNC_WRITE,
+	FUNC_READV,
+	FUNC_WRITEV
+};
+
+
+static void vfs_fsdump_rw_enter(struct file *file, int fs_dump, ktime_t* ts_enter)
+{
+	int match_flag=0;
+
+	if(file->f_inode==NULL)
+		return;
+	if(file->f_inode->i_sb==NULL)
+		return;
+
+	if(fs_dump & FS_LOG_VFS_SDCARDFS_FUSE_RW)
+	{
+		if((file->f_inode->i_sb->s_magic == SDCARDFS_SUPER_MAGIC)||(file->f_inode->i_sb->s_magic == FUSE_SUPER_MAGIC))
+			match_flag = 1;
+	}
+	if(fs_dump & FS_LOG_VFS_F2FS_RW)
+	{
+		if(file->f_inode->i_sb->s_magic == F2FS_SUPER_MAGIC)
+			match_flag = 1;
+	}
+	if(fs_dump & FS_LOG_VFS_EXT4_RW)
+	{
+		if(file->f_inode->i_sb->s_magic == EXT4_SUPER_MAGIC)
+			match_flag = 1;
+	}
+
+	if(match_flag)
+		*ts_enter = ktime_get();
+
+}
+
+static void vfs_fsdump_rw_exit(struct file *file, int fs_dump, ktime_t* ts_enter, size_t count, loff_t offset, int rw_func)
+{
+	int match_flag=0;
+	int duration;
+	char fullname_buf[512];
+	char *fullname=NULL;
+	ktime_t ts_exit, duration_ktime;
+	char func_type[8];
+
+	if(file->f_inode==NULL)
+		return;
+	if(file->f_inode->i_sb==NULL)
+		return;
+
+	if(fs_dump & FS_LOG_VFS_SDCARDFS_FUSE_RW)
+	{
+		if((file->f_inode->i_sb->s_magic == SDCARDFS_SUPER_MAGIC)||(file->f_inode->i_sb->s_magic == FUSE_SUPER_MAGIC))
+			match_flag = 1;
+	}
+	if(fs_dump & FS_LOG_VFS_F2FS_RW)
+	{
+		if(file->f_inode->i_sb->s_magic == F2FS_SUPER_MAGIC)
+			match_flag = 1;
+	}
+	if(fs_dump & FS_LOG_VFS_EXT4_RW)
+	{
+		if(file->f_inode->i_sb->s_magic == EXT4_SUPER_MAGIC)
+			match_flag = 1;
+	}
+
+	if(match_flag==0)
+	{
+		return;
+	}
+	else
+	{
+		ts_exit = ktime_get();
+		duration_ktime = ktime_sub(ts_exit, *ts_enter);
+		duration = duration_ktime.tv64/1000;
+
+		fullname=dentry_path(file->f_path.dentry,fullname_buf,sizeof(fullname_buf));
+		// not dump logd/* files
+		if(!strstr(fullname, "logd"))
+		{
+			switch(rw_func)
+			{
+				case FUNC_READ:
+					strcpy(func_type, "READ");
+					break;
+				case FUNC_READV:
+					strcpy(func_type, "READV");
+					break;
+				case FUNC_WRITE:
+					strcpy(func_type, "WRITE");
+					break;
+				case FUNC_WRITEV:
+					strcpy(func_type, "WRITEV");
+					break;
+				default:
+					strcpy(func_type, "UNDEF");
+					break;
+			}
+
+			//printk("%s(%d): %s, inode: %lu, name: %s, len: %lu, pos: %lld, duration: %d\n", current->comm, current->pid, func_type, file->f_inode->i_ino, fullname, count, offset, duration);
+			if(fullname==NULL)
+			{
+				trace_fsdbg_vfs_rw(func_type, file->f_inode->i_ino, "NULL", count, offset, duration);
+			}
+			else
+			{
+				trace_fsdbg_vfs_rw(func_type, file->f_inode->i_ino, fullname, count, offset, duration);
+			}
+		}
+	}
+
+}
+
 
 /**
  * generic_file_llseek_size - generic llseek implementation for regular files
@@ -460,6 +579,8 @@ EXPORT_SYMBOL(__vfs_read);
 ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 {
 	ssize_t ret;
+	ktime_t time_start;
+	loff_t offset=0;
 
 	if (!(file->f_mode & FMODE_READ))
 		return -EBADF;
@@ -467,6 +588,12 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 		return -EINVAL;
 	if (unlikely(!access_ok(VERIFY_WRITE, buf, count)))
 		return -EFAULT;
+
+	if(unlikely(fs_dump != 0))
+	{
+		vfs_fsdump_rw_enter(file, fs_dump, &time_start);
+		offset = *pos;
+	}
 
 	ret = rw_verify_area(READ, file, pos, count);
 	if (!ret) {
@@ -478,6 +605,11 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 			add_rchar(current, ret);
 		}
 		inc_syscr(current);
+	}
+
+	if(unlikely(fs_dump != 0))
+	{
+		vfs_fsdump_rw_exit(file, fs_dump, &time_start, count, offset, FUNC_READ);
 	}
 
 	return ret;
@@ -544,6 +676,8 @@ EXPORT_SYMBOL(__kernel_write);
 ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
 {
 	ssize_t ret;
+	ktime_t time_start;
+	loff_t offset=0;
 
 	if (!(file->f_mode & FMODE_WRITE))
 		return -EBADF;
@@ -551,6 +685,12 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 		return -EINVAL;
 	if (unlikely(!access_ok(VERIFY_READ, buf, count)))
 		return -EFAULT;
+
+	if(unlikely(fs_dump != 0))
+	{
+		vfs_fsdump_rw_enter(file, fs_dump, &time_start);
+		offset = *pos;
+	}
 
 	ret = rw_verify_area(WRITE, file, pos, count);
 	if (!ret) {
@@ -565,6 +705,12 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 		inc_syscw(current);
 		file_end_write(file);
 	}
+
+	if(unlikely(fs_dump != 0))
+	{
+		vfs_fsdump_rw_exit(file, fs_dump, &time_start, count, offset, FUNC_WRITE);
+	}
+
 
 	return ret;
 }
@@ -645,7 +791,7 @@ SYSCALL_DEFINE4(pwrite64, unsigned int, fd, const char __user *, buf,
 	f = fdget(fd);
 	if (f.file) {
 		ret = -ESPIPE;
-		if (f.file->f_mode & FMODE_PWRITE)  
+		if (f.file->f_mode & FMODE_PWRITE)
 			ret = vfs_write(f.file, buf, count, &pos);
 		fdput(f);
 	}
@@ -890,12 +1036,29 @@ out:
 ssize_t vfs_readv(struct file *file, const struct iovec __user *vec,
 		  unsigned long vlen, loff_t *pos, int flags)
 {
+	ssize_t ret;
+	ktime_t time_start;
+	loff_t offset=0;
+
 	if (!(file->f_mode & FMODE_READ))
 		return -EBADF;
 	if (!(file->f_mode & FMODE_CAN_READ))
 		return -EINVAL;
 
-	return do_readv_writev(READ, file, vec, vlen, pos, flags);
+	if(unlikely(fs_dump != 0))
+	{
+		vfs_fsdump_rw_enter(file, fs_dump, &time_start);
+		offset = *pos;
+	}
+
+	ret = do_readv_writev(READ, file, vec, vlen, pos, flags);
+
+	if(unlikely(fs_dump != 0))
+	{
+		vfs_fsdump_rw_exit(file, fs_dump, &time_start, vlen, offset, FUNC_READV);
+	}
+
+	return ret;
 }
 
 EXPORT_SYMBOL(vfs_readv);
@@ -903,12 +1066,29 @@ EXPORT_SYMBOL(vfs_readv);
 ssize_t vfs_writev(struct file *file, const struct iovec __user *vec,
 		   unsigned long vlen, loff_t *pos, int flags)
 {
+	ssize_t ret;
+	ktime_t time_start;
+	loff_t offset=0;
+
 	if (!(file->f_mode & FMODE_WRITE))
 		return -EBADF;
 	if (!(file->f_mode & FMODE_CAN_WRITE))
 		return -EINVAL;
 
-	return do_readv_writev(WRITE, file, vec, vlen, pos, flags);
+	if(unlikely(fs_dump != 0))
+	{
+		vfs_fsdump_rw_enter(file, fs_dump, &time_start);
+		offset = *pos;
+	}
+
+	ret = do_readv_writev(WRITE, file, vec, vlen, pos, flags);
+
+	if(unlikely(fs_dump != 0))
+	{
+		vfs_fsdump_rw_exit(file, fs_dump, &time_start, vlen, offset, FUNC_WRITEV);
+	}
+
+	return ret;
 }
 
 EXPORT_SYMBOL(vfs_writev);

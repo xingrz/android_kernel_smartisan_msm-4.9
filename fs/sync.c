@@ -225,12 +225,24 @@ static int do_fsync(unsigned int fd, int datasync)
 
 SYSCALL_DEFINE1(fsync, unsigned int, fd)
 {
+#if 1 // for test f2fs dump use
 	return do_fsync(fd, 0);
+#else
+	if (likely(!(current->flags & PF_IGNORE_FSYNC)))
+		return do_fsync(fd, 0);
+	return 0;
+#endif
 }
 
 SYSCALL_DEFINE1(fdatasync, unsigned int, fd)
 {
+#if 1 // for test f2fs dump use
 	return do_fsync(fd, 1);
+#else
+	if (likely(!(current->flags & PF_IGNORE_FDATASYNC)))
+		return do_fsync(fd, 1);
+	return 0;
+#endif
 }
 
 /*

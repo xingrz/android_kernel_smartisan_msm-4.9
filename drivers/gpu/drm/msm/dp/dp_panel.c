@@ -24,6 +24,8 @@
 #define VSC_EXT_VESA_SDP_SUPPORTED BIT(4)
 #define VSC_EXT_VESA_SDP_CHAINING_SUPPORTED BIT(5)
 
+extern int rdv_usb3_dp_alt_mode(bool enable);
+
 enum dp_panel_hdr_pixel_encoding {
 	RGB,
 	YCbCr444,
@@ -104,7 +106,7 @@ static const u8 vendor_name[8] = {81, 117, 97, 108, 99, 111, 109, 109};
 static const u8 product_desc[16] = {83, 110, 97, 112, 100, 114, 97, 103,
 	111, 110, 0, 0, 0, 0, 0, 0};
 
-static int dp_panel_read_dpcd(struct dp_panel *dp_panel)
+static int dp_panel_read_dpcd(struct dp_panel *dp_panel, bool multi_func)
 {
 	int rlen, rc = 0;
 	struct dp_panel_private *panel;
@@ -176,7 +178,15 @@ static int dp_panel_read_dpcd(struct dp_panel *dp_panel)
 	link_info->num_lanes = dp_panel->dpcd[DP_MAX_LANE_COUNT] &
 				DP_MAX_LANE_COUNT_MASK;
 
+	if (multi_func)
+		link_info->num_lanes = min_t(unsigned int,
+			link_info->num_lanes, 2);
+
 	pr_debug("lane_count=%d\n", link_info->num_lanes);
+	if (link_info->num_lanes == 2)
+		rdv_usb3_dp_alt_mode(true);
+	else
+		rdv_usb3_dp_alt_mode(false);
 
 	if (drm_dp_enhanced_frame_cap(dpcd))
 		link_info->capabilities |= caps;
@@ -303,7 +313,7 @@ static int dp_panel_read_edid(struct dp_panel *dp_panel,
 }
 
 static int dp_panel_read_sink_caps(struct dp_panel *dp_panel,
-	struct drm_connector *connector)
+	struct drm_connector *connector, bool multi_func)
 {
 	int rc = 0;
 	struct dp_panel_private *panel;
@@ -315,7 +325,7 @@ static int dp_panel_read_sink_caps(struct dp_panel *dp_panel,
 
 	panel = container_of(dp_panel, struct dp_panel_private, dp_panel);
 
-	rc = dp_panel_read_dpcd(dp_panel);
+	rc = dp_panel_read_dpcd(dp_panel, multi_func);
 	if (rc || !is_link_rate_valid(drm_dp_link_rate_to_bw_code(
 		dp_panel->link_info.rate)) || !is_lane_count_valid(
 		dp_panel->link_info.num_lanes) ||

@@ -86,6 +86,11 @@ struct bio {
 	 * since the page is anon.
 	 */
 	struct inode		*bi_dio_inode;
+#ifdef CONFIG_IO_MONITOR
+	s64  bi_starttime;
+	int bi_pid;
+	char bi_taskname[16];
+#endif
 	/*
 	 * We can inline a number of vecs at the end of the bio, to avoid
 	 * double allocations for a small number of bio_vecs. This member

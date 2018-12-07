@@ -20,8 +20,15 @@
 #include <linux/bitops.h>
 #include <linux/interrupt.h>
 #include <linux/spinlock.h>
+#include <linux/mutex.h>
 #include <linux/rcupdate.h>
 #include <linux/workqueue.h>
+#include <linux/delay.h>
+#include <linux/debugfs.h>
+#include <linux/bio.h>
+#include <linux/kfifo.h>
+#include <trace/events/fsdbg.h>
+
 
 unsigned int sysctl_nr_open __read_mostly = 1024*1024;
 unsigned int sysctl_nr_open_min = BITS_PER_LONG;
@@ -29,6 +36,7 @@ unsigned int sysctl_nr_open_min = BITS_PER_LONG;
 #define __const_min(x, y) ((x) < (y) ? (x) : (y))
 unsigned int sysctl_nr_open_max =
 	__const_min(INT_MAX, ~(size_t)0/sizeof(void *)) & -BITS_PER_LONG;
+unsigned int fs_dump;
 
 static void *alloc_fdmem(size_t size)
 {
@@ -985,3 +993,656 @@ int iterate_fd(struct files_struct *files, unsigned n,
 	return res;
 }
 EXPORT_SYMBOL(iterate_fd);
+
+// get full path from inode
+char *getfullpath(struct inode *inod,char* buffer,int len)
+{
+	struct hlist_node* plist = NULL;
+	struct dentry* tmp = NULL;
+	struct dentry* dent = NULL;
+	char* pbuf;
+	struct inode* pinode = inod;
+
+	buffer[len - 1] = '\0';
+	if(pinode == NULL)
+		return NULL;
+
+	hlist_for_each(plist,&pinode->i_dentry)
+	{
+		tmp = hlist_entry(plist,struct dentry,d_u.d_alias);
+		if(tmp->d_inode == pinode)
+		{
+			dent = tmp;
+			break;
+		}
+	}
+	if(dent == NULL)
+	{
+		return NULL;
+	}
+
+	pbuf = dentry_path(dent, buffer, len);
+	if(IS_ERR(pbuf))
+		pbuf = NULL;
+	 return pbuf;
+}
+
+// print in ftrace
+int ftrace_print(char const *fmt, ...)
+{
+	char buf[512];
+	int len;
+	va_list ap;
+
+	if((fs_dump&FS_LOG_FTRACE_PRINT) == 0)
+		return 0;
+
+	va_start(ap, fmt);
+	len = vsprintf(buf, fmt, ap);
+	va_end(ap);
+	trace_fsdbg_print(buf);
+	return len;
+}
+
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+
+struct delayed_work fsdbg_dw_inodes_dump;
+struct delayed_work fsdbg_dw_file_write;
+
+struct kfifo fsdbg_fifo;
+#define FSDBG_FIFO_SIZE  0x10000
+#define FSDBG_WRITE_BUF_SIZE  0x4000
+
+enum {
+	FSDBG_F2FS = 1<<0,
+	FSDBG_EXT4 = 1<<1
+};
+
+int fsdbg_flag_last_data;
+int fsdbg_flag_dump_to_file;
+int fsdbg_flag_fs_filter;
+
+char fsdbg_filename[64];
+
+void fsdbg_rw_info_to_fifo(struct inode *inod)
+{
+	char line_buf[512];
+	u64 clock;
+	int fs_type;
+
+	// get inode fs type
+	if(inod->i_sb->s_magic == EXT4_SUPER_MAGIC)
+	{
+		fs_type = FSDBG_EXT4;
+	}
+	else if(inod->i_sb->s_magic == F2FS_SUPER_MAGIC)
+	{
+		fs_type = FSDBG_F2FS;
+	}
+	else
+	{
+		fs_type = 0;
+	}
+
+	if((fsdbg_flag_fs_filter & fs_type)==0)
+		return;
+
+	if((inod->i_write_times!=0)||(inod->i_read_times!=0))
+	{
+		if(inod->i_filename == UNINIT_FILE_NAME)
+		{
+			printk("ino=%lu, name=%s\n", inod->i_ino, "UNINIT_FILE_NAME");
+		}
+		else
+		{
+			clock = local_clock();
+			clock /=1000;
+			snprintf(line_buf, sizeof(line_buf), "[%5llu.%06llu] %s(%d): w_times=%llu, w_count=%llu, r_times=%llu, r_count=%llu, ino=%lu, name=%s\n",
+				clock/1000000, clock%1000000, current->comm, current->pid, inod->i_write_times, inod->i_write_count,inod->i_read_times, inod->i_read_count, inod->i_ino, inod->i_filename);
+			//pr_debug("%s", line_buf);
+			kfifo_in(&fsdbg_fifo, line_buf, strlen(line_buf));
+		}
+
+		// clear count for next time use
+		inod->i_write_count = 0;
+		inod->i_read_count = 0;
+		inod->i_write_times = 0;
+		inod->i_read_times = 0;
+		inod->i_filename = UNINIT_FILE_NAME;
+	}
+}
+
+int fsdbg_write_to_file(void)
+{
+	int fifo_len;
+
+	// disable dump to file
+	if(fsdbg_flag_dump_to_file == 0)
+		return 0;
+
+	fifo_len = kfifo_len(&fsdbg_fifo);
+
+	if((fifo_len > FSDBG_FIFO_SIZE/2)||(fsdbg_flag_last_data !=0 ))
+	{
+		schedule_delayed_work(&fsdbg_dw_file_write, 0);
+	}
+
+	// fifo len over 3/4 return flag
+	if(fifo_len > 3*FSDBG_FIFO_SIZE/4)
+		return 1;
+	else
+		return 0;
+}
+static void handler_inodes_dump(struct work_struct *work)
+{
+	// disable dump to file
+	if(fsdbg_flag_dump_to_file == 0)
+		return;
+
+	fsdbg_active_inodes_dump();
+}
+
+static void handler_log_file_write(struct work_struct *work)
+{
+	u64 timestamp;
+	mm_segment_t old_fs;
+	int fd, fifo_len;
+	char *write_buf;
+	int write_size;
+
+	// disable dump to file
+	if(fsdbg_flag_dump_to_file == 0)
+		return;
+
+	if(fsdbg_filename[0]==0)
+	{
+		// create file rw log file
+		timestamp = ktime_get().tv64;
+		timestamp /= 1000;
+		sprintf(fsdbg_filename, "/data/misc/logd/fslog_%llu_%06llu.log", timestamp/1000000, timestamp%1000000 );
+		//printk("fsdbg_filename=%s\n", fsdbg_filename);
+
+		old_fs = get_fs();
+		set_fs(KERNEL_DS);
+		fd = sys_open(fsdbg_filename, O_CREAT|O_WRONLY, 0666);
+		if(fd>=0)
+		{
+			sys_close(fd);
+		}
+		set_fs(old_fs);
+	}
+
+	//write log into file
+	fifo_len = kfifo_len(&fsdbg_fifo);
+	if(fifo_len == 0)
+		goto _exit;
+	if((fsdbg_flag_last_data==0) && (fifo_len<FSDBG_WRITE_BUF_SIZE))
+		goto _exit;
+
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+	fd = sys_open(fsdbg_filename, O_APPEND|O_WRONLY, 0666);
+	if(fd < 0)
+	{
+		set_fs(old_fs);
+		printk("open %s error, fd = %d\n", fsdbg_filename, fd);
+		goto _exit;
+	}
+	write_buf = kmalloc(FSDBG_WRITE_BUF_SIZE, GFP_KERNEL);
+	if(write_buf == NULL)
+	{
+		set_fs(old_fs);
+		printk("write_buf kmalloc error\n");
+		goto _exit;
+	}
+	do
+	{
+		if(fifo_len > FSDBG_WRITE_BUF_SIZE)
+		{
+			write_size = FSDBG_WRITE_BUF_SIZE;
+		}
+		else if(fsdbg_flag_last_data)
+		{
+			write_size = fifo_len;
+			fsdbg_filename[0] = 0;
+			fsdbg_flag_last_data = 0;
+		}
+		else
+		{
+			break;
+		}
+
+		write_size = kfifo_out(&fsdbg_fifo, write_buf, write_size);
+		if(write_size < 0)
+			break;
+
+		sys_write(fd, write_buf, write_size);
+		fifo_len = kfifo_len(&fsdbg_fifo);
+	}while(fifo_len > 0);
+
+	sys_close(fd);
+	set_fs(old_fs);
+	kfree(write_buf);
+
+_exit:
+	return;
+}
+
+#endif //CONFIG_FILESYSTEM_STATISTICS
+
+#ifdef CONFIG_IO_MONITOR
+#define DEFAULT_IOM_THRESHOLD (300*1000000)    // 300 ms
+s64 iom_threshold;
+unsigned int iom_mask;
+
+struct kfifo iom_log_fifo_blk;
+struct kfifo iom_log_fifo_fs;
+
+spinlock_t iom_log_fifo_lock_blk;
+struct mutex iom_log_fifo_lock_fs;
+#define IOM_LOCK_SPINLOCK 	0
+#define IOM_LOCK_MUTEX 	1
+
+void iom_bio_end(struct bio *bio)
+{
+	ktime_t end, start;
+	ktime_t duration_ktime;
+	int duration;
+	char filename_buf[512], *filename;
+	uint32_t inode=0;
+	char line_buf[512];
+	int fifo_len, len, size;
+
+	// get the bio process time
+	start.tv64 = bio->bi_starttime;
+	end = ktime_get();
+	duration_ktime = ktime_sub(end, start);
+	if(duration_ktime.tv64 < iom_threshold)
+		return;
+
+	// convert ns to ms
+	duration = duration_ktime.tv64/1000000;
+	// get full path filename
+	filename = get_bio_related_filename(bio, filename_buf,sizeof(filename_buf),&inode);
+
+	// Insert log to FIFO
+	start.tv64 = start.tv64/1000;
+	if(filename)
+	{
+		snprintf(line_buf, sizeof(line_buf), "[%5llu.%06llu] %s(%d): BLK, %s, pos=%lu, len=%u, err=%d, duration=%d, ino=%u, name=%s\n",
+			start.tv64/1000000, start.tv64%1000000, bio->bi_taskname, bio->bi_pid, op_is_write(bio_op(bio)) ? "WRITE" : "READ",bio->bi_iter.bi_sector, bio_sectors(bio), bio->bi_error, duration, inode, filename);
+	}
+	else
+	{
+		snprintf(line_buf, sizeof(line_buf), "[%5llu.%06llu] %s(%d): BLK, %s, pos=%lu, len=%u, err=%d, duration=%d, ino=%u, name=%s\n",
+			start.tv64/1000000, start.tv64%1000000, bio->bi_taskname, bio->bi_pid, op_is_write(bio_op(bio)) ? "WRITE" : "READ",bio->bi_iter.bi_sector, bio_sectors(bio), bio->bi_error, duration, inode, "NULL");
+	}
+	//pr_debug("%s", line_buf);
+	spin_lock(&iom_log_fifo_lock_blk);
+	kfifo_in(&iom_log_fifo_blk, line_buf, strlen(line_buf));
+	spin_unlock(&iom_log_fifo_lock_blk);
+	// If fifo full discard old log
+	fifo_len = kfifo_len(&iom_log_fifo_blk);
+	if(fifo_len > IOM_FIFO_SIZE - IOM_FIFO_RSV_SIZE)
+	{
+		len = IOM_FIFO_RSV_SIZE;
+		while(len > 0)
+		{
+			spin_lock(&iom_log_fifo_lock_blk);
+			size = kfifo_out(&iom_log_fifo_blk, line_buf, sizeof(line_buf));
+			spin_unlock(&iom_log_fifo_lock_blk);
+			if(size < 0)
+			{
+				break;
+			}
+			else
+			{
+				len -= sizeof(line_buf);
+			}
+		}
+	}
+
+}
+
+void iom_bio_start(struct bio *bio)
+{
+	ktime_t ts;
+
+	ts = ktime_get();
+	bio->bi_starttime  = ts.tv64;
+	bio->bi_pid = current->pid;
+	memcpy(bio->bi_taskname, current->comm, sizeof(bio->bi_taskname));
+}
+
+static void __iom_log_file_write(char* filename, struct kfifo* logfifo,  void* fifo_lock, int lock_type)
+{
+	mm_segment_t old_fs;
+	int fd, fifo_len;
+	char *write_buf=NULL;
+	int write_size;
+
+	// open file
+	old_fs = get_fs();
+	set_fs(KERNEL_DS);
+	fd = sys_open(filename, O_CREAT|O_WRONLY|O_TRUNC, 0666);
+	if(fd < 0)
+	{
+		printk("open iomonitor.log error, fd = %d\n", fd);
+		goto _exit;
+	}
+
+	//get fifo len
+	fifo_len = kfifo_len(logfifo);
+	if(fifo_len == 0)
+		goto _exit;
+
+	write_buf = kmalloc(IOM_FIFO_SIZE, GFP_KERNEL);
+	if(write_buf == NULL)
+	{
+		printk("write_buf kmalloc error\n");
+		goto _exit;
+	}
+
+	// get data from FIFO
+	if(lock_type == IOM_LOCK_SPINLOCK)
+	{
+		spin_lock_irq((spinlock_t*)fifo_lock);
+	}
+	else
+	{
+		mutex_lock((struct mutex*)fifo_lock);
+	}
+	write_size = kfifo_out(logfifo, write_buf, IOM_FIFO_SIZE);
+	if(lock_type == IOM_LOCK_SPINLOCK)
+	{
+		spin_unlock_irq((spinlock_t*)fifo_lock);
+	}
+	else
+	{
+		mutex_unlock((struct mutex*)fifo_lock);
+	}
+	if(write_size < 0)
+		goto _exit;
+
+	// write to file
+	sys_write(fd, write_buf, write_size);
+	sys_close(fd);
+
+_exit:
+	set_fs(old_fs);
+	if(write_buf)
+		kfree(write_buf);
+	return;
+}
+
+static void iom_log_file_write(void)
+{
+	__iom_log_file_write("/data/misc/logd/iomonitor_blk.log", &iom_log_fifo_blk, &iom_log_fifo_lock_blk, IOM_LOCK_SPINLOCK);
+	__iom_log_file_write("/data/misc/logd/iomonitor_fs.log", &iom_log_fifo_fs, &iom_log_fifo_lock_fs, IOM_LOCK_MUTEX);
+}
+
+#endif //CONFIG_IO_MONITOR
+
+static ssize_t command_read(struct file *filp, char __user *buffer,
+				size_t count, loff_t *ppos)
+{
+	char buf[1024];
+
+	snprintf(buf, sizeof(buf),
+			"\nFile system debug kits V1.0 	 Author: lizhigang@smartisan.com\n\n"
+			"Support commands: \n"
+			"       test               Test command\n"
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+			"       inodes_dump        Dump all inodes rw information into file\n"
+			"       disable_dump       Disable dump function\n"
+			"       enable_dump        Enable dump function\n"
+			"       fs=f2fs            Only dump F2FS type, such as data partition\n"
+			"       fs=ext4            Only dump EXT4 type, such as system partition\n"
+			"       fs=f2fs_ext4       Dump F2FS and EXT4\n"
+#endif
+
+#ifdef CONFIG_IO_MONITOR
+			"       iom_dump                Dump long IO log into file\n"
+			"       iom_mask=XX             Set moniter mask, default is block layer\n"
+			"       iom_threshold=XX        Set long IO time threshold, unit is ms\n"
+#endif
+			"\n"
+			);
+
+	return simple_read_from_buffer(buffer, count, ppos, buf, strlen(buf));
+}
+
+
+static ssize_t command_write(struct file *file, const char __user *ubuf,
+						size_t count, loff_t *ppos)
+{
+	char msg[32];
+#ifdef CONFIG_IO_MONITOR
+	int idx, ret;
+	unsigned int value;
+#endif
+
+	if (copy_from_user(msg, ubuf, count)) {
+		return -EFAULT;
+	}
+
+	msg[count-1]=0;
+
+	if(!strcasecmp(msg, "test"))
+	{
+		int i;
+		char line_buf[512];
+		printk("%s,  test command get\n", __func__);
+		sprintf(line_buf, "%s,  test command get\n", __func__);
+		for(i=0;i<100;i++)
+		{
+			//schedule_delayed_work(&fsdbg_dw_inodes_dump, 0);
+		}
+
+	}
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+	else if(!strcasecmp(msg, "inodes_dump"))
+	{
+		pr_debug("%s,  inode_dump command get\n", __func__);
+		schedule_delayed_work(&fsdbg_dw_inodes_dump, 0);
+
+	}
+	else if(!strcasecmp(msg, "disable_dump"))
+	{
+		pr_debug("%s,  disable_dump command get\n", __func__);
+		fsdbg_flag_dump_to_file = 0;
+	}
+	else if(!strcasecmp(msg, "enable_dump"))
+	{
+		pr_debug("%s,  enable_dump command get\n", __func__);
+		fsdbg_flag_dump_to_file = 1;
+	}
+	else if(!strcasecmp(msg, "fs=f2fs"))
+	{
+		fsdbg_flag_fs_filter = FSDBG_F2FS;
+	}
+	else if(!strcasecmp(msg, "fs=ext4"))
+	{
+		fsdbg_flag_fs_filter = FSDBG_EXT4;
+	}
+	else if(!strcasecmp(msg, "fs=f2fs_ext4"))
+	{
+		fsdbg_flag_fs_filter = FSDBG_EXT4 | FSDBG_F2FS;
+	}
+	else if(!strcasecmp(msg, "fs=ext4_f2fs"))
+	{
+		fsdbg_flag_fs_filter = FSDBG_EXT4 | FSDBG_F2FS;
+	}
+#endif
+
+#ifdef CONFIG_IO_MONITOR
+	else if(!strcasecmp(msg, "iom_dump"))
+	{
+		iom_log_file_write();
+	}
+	else if(!strncasecmp(msg, "iom_mask=", strlen("iom_mask=")))
+	{
+		idx = strlen("iom_mask=");
+		ret = kstrtouint(&msg[idx], 0, &value);
+		if(ret == 0)
+		{
+			iom_mask = value;
+		}
+	}
+	else if(!strncasecmp(msg, "iom_threshold=", strlen("iom_threshold=")))
+	{
+		idx = strlen("iom_threshold=");
+		ret = kstrtouint(&msg[idx], 0, &value);
+		if(ret == 0)
+		{
+			iom_threshold = value*1000000;
+		}
+	}
+#endif
+	else
+	{
+		printk("%s,  unsupport command\n", __func__);
+	}
+
+	return count;
+}
+
+static ssize_t status_read(struct file *filp, char __user *buffer,
+				size_t count, loff_t *ppos)
+{
+	char buf[1024];
+	int str_len;
+
+	str_len = 0;
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "\nFile system debug kits V1.0 	 Author: lizhigang@smartisan.com\n\n");
+
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+	str_len = strlen(buf);
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "\n--------File system statistics status\n");
+	str_len = strlen(buf);
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "dump fs type:  ");
+	if(fsdbg_flag_fs_filter & FSDBG_F2FS)
+	{
+		str_len = strlen(buf);
+		snprintf(&buf[str_len], sizeof(buf)-str_len, "F2FS ");
+	}
+	if(fsdbg_flag_fs_filter & FSDBG_EXT4)
+	{
+		str_len = strlen(buf);
+		snprintf(&buf[str_len], sizeof(buf)-str_len, "EXT4 ");
+	}
+	str_len = strlen(buf);
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "\ndump_to_file flag: %d\n", fsdbg_flag_dump_to_file);
+	str_len = strlen(buf);
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "dumping file name: %s\n", fsdbg_filename);
+	str_len = strlen(buf);
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "FSDBG log size in FIFO (Max: %d): %d\n", FSDBG_FIFO_SIZE, kfifo_len(&fsdbg_fifo));
+#endif
+
+#ifdef CONFIG_IO_MONITOR
+	str_len = strlen(buf);
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "\n--------IO monitor status\n");
+	str_len = strlen(buf);
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "iom_mask: 0x%X\n", iom_mask);
+	str_len = strlen(buf);
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "iom_threshold: %lld\n", iom_threshold/1000000);
+	str_len = strlen(buf);
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "IOM log size in BLK FIFO (Max: %d): %d\n", IOM_FIFO_SIZE, kfifo_len(&iom_log_fifo_blk));
+	str_len = strlen(buf);
+	snprintf(&buf[str_len], sizeof(buf)-str_len, "IOM log size in FS FIFO (Max: %d): %d\n", IOM_FIFO_SIZE, kfifo_len(&iom_log_fifo_fs));
+#endif
+
+	return simple_read_from_buffer(buffer, count, ppos, buf, strlen(buf));
+}
+
+static const struct file_operations command_fops = {
+	.open		= simple_open,
+	.read		= command_read,
+	.write		= command_write,
+};
+
+static const struct file_operations status_fops = {
+	.open		= simple_open,
+	.read		= status_read,
+};
+
+
+static void fsdbg_debugfs_init(void)
+{
+	struct dentry *f_ent;
+	struct dentry *f_debugfs_dir;
+
+	f_debugfs_dir = debugfs_create_dir("fs_debug", NULL);
+	if (IS_ERR(f_debugfs_dir)) {
+		pr_err("Failed to create fs_debug directory\n");
+		return;
+	}
+
+	f_ent = debugfs_create_file("command", 0600, f_debugfs_dir,
+					NULL, &command_fops);
+	if (IS_ERR(f_ent)) {
+		pr_err("Failed to create command file\n");
+		return;
+	}
+
+	f_ent = debugfs_create_file("status", 0400, f_debugfs_dir,
+					NULL, &status_fops);
+	if (IS_ERR(f_ent)) {
+		pr_err("Failed to create status file\n");
+		return;
+	}
+}
+
+
+static int __init fsdbg_init(void)
+{
+#if (defined CONFIG_FILESYSTEM_STATISTICS) || (defined CONFIG_IO_MONITOR)
+	int ret;
+#endif
+
+	// create debugfs node
+	fsdbg_debugfs_init();
+
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+	// alloc fifo for file rw log
+	ret = kfifo_alloc(&fsdbg_fifo, FSDBG_FIFO_SIZE, GFP_KERNEL);
+	if (ret) {
+		printk(KERN_ERR "fsdbg_fifo alloc error\n");
+		return 1;
+	}
+
+	// init file write delay work
+	INIT_DELAYED_WORK(&fsdbg_dw_inodes_dump, handler_inodes_dump);
+	INIT_DELAYED_WORK(&fsdbg_dw_file_write, handler_log_file_write);
+	fsdbg_filename[0] = 0;
+	fsdbg_flag_last_data = 0;
+	fsdbg_flag_dump_to_file = 0;
+	fsdbg_flag_fs_filter = FSDBG_F2FS;
+#endif
+
+#ifdef CONFIG_IO_MONITOR
+	// set long io threshold default value
+	iom_threshold = DEFAULT_IOM_THRESHOLD;
+	iom_mask = IOM_F2FS_RW|IOM_EXT4_RW;
+
+	// alloc fifo for long IO log
+	ret = kfifo_alloc(&iom_log_fifo_blk, IOM_FIFO_SIZE, GFP_KERNEL);
+	if (ret) {
+		printk(KERN_ERR "iom_log_fifo_blk alloc error\n");
+		return 2;
+	}
+	spin_lock_init(&iom_log_fifo_lock_blk);
+
+	ret = kfifo_alloc(&iom_log_fifo_fs, IOM_FIFO_SIZE, GFP_KERNEL);
+	if (ret) {
+		printk(KERN_ERR "iom_log_fifo_fs alloc error\n");
+		return 2;
+	}
+	mutex_init(&iom_log_fifo_lock_fs);
+
+#endif
+
+	return 0;
+}
+subsys_initcall(fsdbg_init);
+

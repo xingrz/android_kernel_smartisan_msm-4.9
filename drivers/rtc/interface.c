@@ -344,7 +344,8 @@ static int __rtc_set_alarm(struct rtc_device *rtc, struct rtc_wkalrm *alarm)
 		err = -EINVAL;
 	else
 		err = rtc->ops->set_alarm(rtc->dev.parent, alarm);
-
+	if(!err)
+		printk("alarm set %llu secs later wakeup\n",(scheduled-now));
 	return err;
 }
 
@@ -782,7 +783,6 @@ static int rtc_timer_enqueue(struct rtc_device *rtc, struct rtc_timer *timer)
 			break;
 		next = timerqueue_iterate_next(next);
 	}
-
 	timerqueue_add(&rtc->timerqueue, &timer->node);
 	if (!next) {
 		struct rtc_wkalrm alarm;
@@ -944,7 +944,6 @@ int rtc_timer_start(struct rtc_device *rtc, struct rtc_timer *timer,
 
 	timer->node.expires = expires;
 	timer->period = period;
-
 	ret = rtc_timer_enqueue(rtc, timer);
 
 	mutex_unlock(&rtc->ops_lock);

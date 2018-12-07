@@ -134,6 +134,9 @@ static void msm_atomic_wait_for_commit_done(
 	}
 }
 
+#define DSI_ENCODER_NAME "DSI-"
+//#define DP_ENCODER_NAME "TMDS"
+bool touch_needed = false;
 static void
 msm_disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_state)
 {
@@ -188,6 +191,9 @@ msm_disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_state)
 
 		DRM_DEBUG_ATOMIC("disabling [ENCODER:%d:%s]\n",
 				 encoder->base.id, encoder->name);
+
+		if (encoder->name && !strncmp(encoder->name, DSI_ENCODER_NAME, 4))
+			touch_needed = true;
 
 		blank = MSM_DRM_BLANK_POWERDOWN;
 		notifier_data.data = &blank;
@@ -445,6 +451,8 @@ static void msm_atomic_helper_commit_modeset_enables(struct drm_device *dev,
 			continue;
 
 		encoder = connector->state->best_encoder;
+		if (encoder->name && !strncmp(encoder->name, DSI_ENCODER_NAME, 4))
+			touch_needed = true;
 
 		DRM_DEBUG_ATOMIC("bridge enable enabling [ENCODER:%d:%s]\n",
 				 encoder->base.id, encoder->name);
@@ -540,7 +548,7 @@ static void msm_atomic_commit_dispatch(struct drm_device *dev,
 	struct msm_drm_private *priv = dev->dev_private;
 	struct drm_crtc *crtc = NULL;
 	struct drm_crtc_state *crtc_state = NULL;
-	int ret = -EINVAL, i = 0, j = 0;
+	bool ret = true, i = 0, j = 0;
 	bool nonblock;
 
 	/* cache since work will kfree commit in non-blocking case */
@@ -551,13 +559,12 @@ static void msm_atomic_commit_dispatch(struct drm_device *dev,
 			if (priv->disp_thread[j].crtc_id ==
 						crtc->base.id) {
 				if (priv->disp_thread[j].thread) {
-					kthread_queue_work(
+					ret = kthread_queue_work(
 						&priv->disp_thread[j].worker,
 							&commit->commit_work);
 					/* only return zero if work is
 					 * queued successfully.
 					 */
-					ret = 0;
 				} else {
 					DRM_ERROR(" Error for crtc_id: %d\n",
 						priv->disp_thread[j].crtc_id);
@@ -575,7 +582,7 @@ static void msm_atomic_commit_dispatch(struct drm_device *dev,
 			break;
 	}
 
-	if (ret) {
+	if (!ret) {
 		/**
 		 * this is not expected to happen, but at this point the state
 		 * has been swapped, but we couldn't dispatch to a crtc thread.

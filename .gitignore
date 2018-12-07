@@ -18,7 +18,6 @@
 *.so
 *.so.dbg
 *.mod.c
-*.i
 *.lst
 *.symtypes
 *.order
@@ -117,3 +116,4 @@ all.config
 
 # fetched Android config fragments
 kernel/configs/android-*.cfg
+techpack/audio

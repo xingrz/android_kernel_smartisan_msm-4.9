@@ -30,6 +30,9 @@
 #include <linux/mutex.h>
 #include <linux/sysrq.h>
 #include <uapi/linux/serial_core.h>
+#include <linux/console.h>
+
+#define SUPPORT_SYSRQ 1
 
 #ifdef CONFIG_SERIAL_CORE_CONSOLE
 #define uart_console(port) \

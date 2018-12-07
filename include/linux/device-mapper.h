@@ -119,6 +119,14 @@ typedef void (*dm_io_hints_fn) (struct dm_target *ti,
 				struct queue_limits *limits);
 
 /*
+ * This function will recalculate io size per bio if this target support
+ * asymmetric chunk size
+ */
+typedef void (*dm_io_len_calculate_fn) (struct dm_target *ti,
+				sector_t offset,
+				sector_t *optimal_len);
+
+/*
  * Returns:
  *    0: The target can handle the next I/O immediately.
  *    1: The target can't handle the next I/O immediately.
@@ -180,6 +188,7 @@ struct target_type {
 	dm_iterate_devices_fn iterate_devices;
 	dm_io_hints_fn io_hints;
 	dm_direct_access_fn direct_access;
+	dm_io_len_calculate_fn io_calculate;
 
 	/* For internal device-mapper use. */
 	struct list_head list;
@@ -298,6 +307,12 @@ struct dm_target {
 	 * Set if this target does not return zeroes on discarded blocks.
 	 */
 	bool discard_zeroes_data_unsupported:1;
+
+	/*
+	 * Set if this target supported asymmetric chunk size.
+	 */
+	bool asymmetric_chunk_supported:1;
+
 };
 
 /* Each target can link one of these into the table */

@@ -118,7 +118,10 @@ static int dsi_bridge_attach(struct drm_bridge *bridge)
 	return 0;
 
 }
-
+extern void dsi_panel_set_ie_level(u32 ie_level);
+extern u32 is_eye_care_mode;
+extern u32 is_color_mode;
+extern int faceid_enable;
 static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 {
 	int rc = 0;
@@ -165,6 +168,20 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 	}
 	SDE_ATRACE_END("dsi_display_enable");
 	SDE_ATRACE_END("dsi_bridge_pre_enable");
+
+	if(is_color_mode == 1){
+		dsi_panel_set_ie_level(180);
+	}
+
+	if(is_eye_care_mode == 1)
+		dsi_panel_set_ie_level(12);
+
+	if (faceid_enable == 1) {
+		pr_info("enable face recognize....\n");
+	}
+	else if (faceid_enable == 0) {
+		pr_info("disable face recognize....\n");
+	}
 
 	rc = dsi_display_splash_res_cleanup(c_bridge->display);
 	if (rc)
@@ -320,11 +337,9 @@ static bool dsi_bridge_mode_fixup(struct drm_bridge *bridge,
 
 		cur_mode = crtc_state->crtc->mode;
 
-		/* No DMS/VRR when drm pipeline is changing */
 		if (!drm_mode_equal(&cur_mode, adjusted_mode) &&
-			(!(dsi_mode.dsi_mode_flags & DSI_MODE_FLAG_VRR)) &&
-			(!crtc_state->active_changed ||
-			 display->is_cont_splash_enabled))
+			(!(dsi_mode.dsi_mode_flags &
+				DSI_MODE_FLAG_VRR)))
 			dsi_mode.dsi_mode_flags |= DSI_MODE_FLAG_DMS;
 	}
 

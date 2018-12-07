@@ -25,6 +25,7 @@
 #include "drm_connector.h"
 #include "sde_connector.h"
 #include "dp_display.h"
+#include "dp_link.h"
 
 #define DEBUG_NAME "drm_dp"
 
@@ -814,6 +815,28 @@ error:
 	return rc;
 }
 
+static ssize_t dp_debug_read_training_status(struct file *file,
+		char __user *user_buff, size_t count, loff_t *ppos)
+{
+	struct dp_debug_private *debug = file->private_data;
+	char buf[SZ_8];
+	u32 len = 0;
+
+	if (!debug)
+		return -ENODEV;
+
+	if (*ppos)
+		return 0;
+
+	len += snprintf(buf, SZ_8, "%d\n", debug->link->link_training);
+
+	if (copy_to_user(user_buff, buf, len))
+		return -EFAULT;
+
+	*ppos += len;
+	return len;
+}
+
 static const struct file_operations dp_debug_fops = {
 	.open = simple_open,
 	.read = dp_debug_read_info,
@@ -863,12 +886,17 @@ static const struct file_operations hdr_fops = {
 	.read = dp_debug_read_hdr,
 };
 
+static const struct file_operations link_training_fops = {
+	.open = simple_open,
+	.read = dp_debug_read_training_status,
+};
+
 static int dp_debug_init(struct dp_debug *dp_debug)
 {
 	int rc = 0;
 	struct dp_debug_private *debug = container_of(dp_debug,
 		struct dp_debug_private, dp_debug);
-	struct dentry *dir, *file;
+	struct dentry *dir, *file, *link_training;
 
 	dir = debugfs_create_dir(DEBUG_NAME, NULL);
 	if (IS_ERR_OR_NULL(dir)) {
@@ -961,6 +989,15 @@ static int dp_debug_init(struct dp_debug *dp_debug)
 	if (IS_ERR_OR_NULL(file)) {
 		rc = PTR_ERR(file);
 		pr_err("[%s] debugfs hdr failed, rc=%d\n",
+			DEBUG_NAME, rc);
+		goto error_remove_dir;
+	}
+
+	link_training = debugfs_create_file("link_training", 0444, dir,
+					debug, &link_training_fops);
+	if (IS_ERR_OR_NULL(link_training)) {
+		rc = PTR_ERR(link_training);
+		pr_err("[%s] debugfs link_training failed, rc=%d\n",
 			DEBUG_NAME, rc);
 		goto error_remove_dir;
 	}

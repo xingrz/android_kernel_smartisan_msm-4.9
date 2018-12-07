@@ -609,6 +609,17 @@ static void __init clean_rootfs(void)
 
 static int __initdata do_skip_initramfs;
 
+static int __initdata do_root_initramfs;
+
+static int __init root_initramfs_param(char *str)
+{
+	if (*str)
+		return 0;
+	do_root_initramfs = 1;
+	return 1;
+}
+__setup("root_initramfs", root_initramfs_param);
+
 static int __init skip_initramfs_param(char *str)
 {
 	if (*str)
@@ -622,7 +633,7 @@ static int __init populate_rootfs(void)
 {
 	char *err;
 
-	if (do_skip_initramfs)
+	if (do_skip_initramfs && ! do_root_initramfs)
 		return default_rootfs();
 
 	err = unpack_to_rootfs(__initramfs_start, __initramfs_size);

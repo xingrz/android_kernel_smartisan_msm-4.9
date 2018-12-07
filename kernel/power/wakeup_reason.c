@@ -30,7 +30,9 @@
 
 #define MAX_WAKEUP_REASON_IRQS 32
 static int irq_list[MAX_WAKEUP_REASON_IRQS];
+static char *nonirq_wake_list[MAX_WAKEUP_REASON_IRQS];
 static int irqcount;
+static int nonirqcount;
 static bool suspend_abort;
 static char abort_reason[MAX_SUSPEND_ABORT_LEN];
 static struct kobject *wakeup_reason;
@@ -40,25 +42,37 @@ static ktime_t last_monotime; /* monotonic time before last suspend */
 static ktime_t curr_monotime; /* monotonic time after last suspend */
 static ktime_t last_stime; /* monotonic boottime offset before last suspend */
 static ktime_t curr_stime; /* monotonic boottime offset after last suspend */
-
+static char last_wakelock[16];
 static ssize_t last_resume_reason_show(struct kobject *kobj, struct kobj_attribute *attr,
 		char *buf)
 {
-	int irq_no, buf_offset = 0;
+	int irq_no, buf_offset = 0,non_irq_no;
 	struct irq_desc *desc;
 	spin_lock(&resume_reason_lock);
 	if (suspend_abort) {
-		buf_offset = sprintf(buf, "Abort: %s", abort_reason);
+		buf_offset = sprintf(buf, "Abort: %s\n", abort_reason);
 	} else {
-		for (irq_no = 0; irq_no < irqcount; irq_no++) {
-			desc = irq_to_desc(irq_list[irq_no]);
-			if (desc && desc->action && desc->action->name)
-				buf_offset += sprintf(buf + buf_offset, "%d %s\n",
-						irq_list[irq_no], desc->action->name);
-			else
-				buf_offset += sprintf(buf + buf_offset, "%d\n",
-						irq_list[irq_no]);
+		if(irqcount>0){
+			for (irq_no = 0; irq_no < irqcount; irq_no++) {
+				desc = irq_to_desc(irq_list[irq_no]);
+				if (desc && desc->action && desc->action->name){
+					buf_offset += sprintf(buf + buf_offset, "%d %s\n",
+							irq_list[irq_no], desc->action->name);
+				}
+				else{
+					buf_offset += sprintf(buf + buf_offset, "%d\n",
+							irq_list[irq_no]);
+				}
+			}
 		}
+		else if(nonirqcount>0){
+			for(non_irq_no=0;non_irq_no<nonirqcount;non_irq_no++)
+				buf_offset += sprintf(buf+buf_offset,"%d non_irq %s\n",non_irq_no,nonirq_wake_list[non_irq_no]);
+		}
+		else{
+			buf_offset =sprintf(buf, "Abort:by %s:\n",last_wakelock);
+		}
+			
 	}
 	spin_unlock(&resume_reason_lock);
 	return buf_offset;
@@ -108,6 +122,17 @@ static struct attribute_group attr_group = {
  * logs all the wake up reasons to the kernel
  * stores the irqs to expose them to the userspace via sysfs
  */
+void log_last_wake_lock(const char *buf){
+	spin_lock(&resume_reason_lock);
+	if(buf){
+		strncpy(last_wakelock,buf,16);
+	}	
+	spin_unlock(&resume_reason_lock);
+}
+
+
+EXPORT_SYMBOL_GPL(log_last_wake_lock);
+
 void log_wakeup_reason(int irq)
 {
 	struct irq_desc *desc;
@@ -129,6 +154,24 @@ void log_wakeup_reason(int irq)
 	irq_list[irqcount++] = irq;
 	spin_unlock(&resume_reason_lock);
 }
+EXPORT_SYMBOL_GPL(log_wakeup_reason);
+
+void nonirq_log_wakeup_reason(char *name)
+{
+	spin_lock(&resume_reason_lock);
+	if (nonirqcount == MAX_WAKEUP_REASON_IRQS) {
+		spin_unlock(&resume_reason_lock);
+		printk(KERN_WARNING "Resume caused by more than %d IRQs\n",
+				MAX_WAKEUP_REASON_IRQS);
+		return;
+	}
+
+	nonirq_wake_list[nonirqcount++] = name;
+	spin_unlock(&resume_reason_lock);
+}
+
+EXPORT_SYMBOL_GPL(nonirq_log_wakeup_reason);
+
 
 int check_wakeup_reason(int irq)
 {
@@ -172,7 +215,9 @@ static int wakeup_reason_pm_event(struct notifier_block *notifier,
 	case PM_SUSPEND_PREPARE:
 		spin_lock(&resume_reason_lock);
 		irqcount = 0;
+		nonirqcount=0;
 		suspend_abort = false;
+		memset(last_wakelock,0,16);
 		spin_unlock(&resume_reason_lock);
 		/* monotonic time since boot */
 		last_monotime = ktime_get();

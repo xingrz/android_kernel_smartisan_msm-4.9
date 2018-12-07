@@ -813,8 +813,14 @@ config QPNP_MISC
 	  and the driver provides an API to check if this interrupt
 	  is available on the current PMIC chip.
 
+config RF_CABLE_PLUG_DETECTION
+	tristate "RF Cable Plug IN-OUT Detection"
+	default y
+	help
+		Say 'y' here to enable RF cable plug in-out dection function support.
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
+source "drivers/misc/haptic/Kconfig"
 source "drivers/misc/cb710/Kconfig"
 source "drivers/misc/ti-st/Kconfig"
 source "drivers/misc/lis3lv02d/Kconfig"

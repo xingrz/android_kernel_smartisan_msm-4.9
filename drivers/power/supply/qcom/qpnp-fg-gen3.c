@@ -126,8 +126,6 @@
 #define KI_COEFF_MED_DISCHG_v2_OFFSET	0
 #define KI_COEFF_HI_DISCHG_v2_WORD	10
 #define KI_COEFF_HI_DISCHG_v2_OFFSET	1
-#define KI_COEFF_HI_CHG_v2_WORD		11
-#define KI_COEFF_HI_CHG_v2_OFFSET	2
 #define DELTA_BSOC_THR_v2_WORD		12
 #define DELTA_BSOC_THR_v2_OFFSET	3
 #define DELTA_MSOC_THR_v2_WORD		13
@@ -308,17 +306,11 @@ static struct fg_sram_param pmi8998_v2_sram_params[] = {
 		ESR_TIMER_CHG_INIT_OFFSET, 2, 1, 1, 0, fg_encode_default, NULL),
 	PARAM(ESR_PULSE_THRESH, ESR_PULSE_THRESH_WORD, ESR_PULSE_THRESH_OFFSET,
 		1, 100000, 390625, 0, fg_encode_default, NULL),
-	PARAM(KI_COEFF_LOW_DISCHG, KI_COEFF_LOW_DISCHG_v2_WORD,
-		KI_COEFF_LOW_DISCHG_v2_OFFSET, 1, 1000, 244141, 0,
-		fg_encode_default, NULL),
 	PARAM(KI_COEFF_MED_DISCHG, KI_COEFF_MED_DISCHG_v2_WORD,
 		KI_COEFF_MED_DISCHG_v2_OFFSET, 1, 1000, 244141, 0,
 		fg_encode_default, NULL),
 	PARAM(KI_COEFF_HI_DISCHG, KI_COEFF_HI_DISCHG_v2_WORD,
 		KI_COEFF_HI_DISCHG_v2_OFFSET, 1, 1000, 244141, 0,
-		fg_encode_default, NULL),
-	PARAM(KI_COEFF_HI_CHG, KI_COEFF_HI_CHG_v2_WORD,
-		KI_COEFF_HI_CHG_v2_OFFSET, 1, 1000, 244141, 0,
 		fg_encode_default, NULL),
 	PARAM(KI_COEFF_FULL_SOC, KI_COEFF_FULL_SOC_WORD,
 		KI_COEFF_FULL_SOC_OFFSET, 1, 1000, 244141, 0,
@@ -762,6 +754,7 @@ static int fg_get_msoc_raw(struct fg_chip *chip, int *val)
 
 #define FULL_CAPACITY	100
 #define FULL_SOC_RAW	255
+#define HIDEN_SOC_RAW	7
 static int fg_get_msoc(struct fg_chip *chip, int *msoc)
 {
 	int rc;
@@ -769,7 +762,7 @@ static int fg_get_msoc(struct fg_chip *chip, int *msoc)
 	rc = fg_get_msoc_raw(chip, msoc);
 	if (rc < 0)
 		return rc;
-
+#ifndef HIDEN_SOC_RAW
 	/*
 	 * To have better endpoints for 0 and 100, it is good to tune the
 	 * calculation discarding values 0 and 255 while rounding off. Rest
@@ -783,6 +776,22 @@ static int fg_get_msoc(struct fg_chip *chip, int *msoc)
 	else
 		*msoc = DIV_ROUND_CLOSEST((*msoc - 1) * (FULL_CAPACITY - 2),
 				FULL_SOC_RAW - 2) + 1;
+#else
+	/*0:		0%
+	 *1~7:		1%
+	 *8~248:	2%~99%
+	 *249~255:	100%
+	 */
+	if (*msoc > (FULL_SOC_RAW - HIDEN_SOC_RAW))
+		*msoc = 100;
+	else if (*msoc == 0)
+		*msoc = 0;
+	else if (*msoc < HIDEN_SOC_RAW + 1)
+		*msoc = 1;
+	else
+		*msoc = DIV_ROUND_CLOSEST((*msoc - HIDEN_SOC_RAW) * (FULL_CAPACITY - 3),
+				FULL_SOC_RAW - HIDEN_SOC_RAW*2) + 2 ;
+#endif
 	return 0;
 }
 
@@ -2140,7 +2149,7 @@ static int fg_adjust_recharge_voltage(struct fg_chip *chip)
 	/* Lower the recharge voltage in soft JEITA */
 	if (chip->health == POWER_SUPPLY_HEALTH_WARM ||
 			chip->health == POWER_SUPPLY_HEALTH_COOL)
-		recharge_volt_mv -= 200;
+		recharge_volt_mv -= 300;
 
 	rc = fg_set_recharge_voltage(chip, recharge_volt_mv);
 	if (rc < 0) {
@@ -2566,7 +2575,7 @@ static int fg_get_cycle_count(struct fg_chip *chip)
 	mutex_unlock(&chip->cyc_ctr.lock);
 	return count;
 }
-
+extern bool bat_full_flag;
 static void status_change_work(struct work_struct *work)
 {
 	struct fg_chip *chip = container_of(work,
@@ -2591,6 +2600,9 @@ static void status_change_work(struct work_struct *work)
 		goto out;
 	}
 
+	if(bat_full_flag)
+		chip->charge_status = POWER_SUPPLY_STATUS_FULL;
+	else
 	chip->charge_status = prop.intval;
 	rc = power_supply_get_property(chip->batt_psy,
 			POWER_SUPPLY_PROP_CHARGE_TYPE, &prop);
@@ -2965,6 +2977,30 @@ out:
 		pm_stay_awake(chip->dev);
 		schedule_work(&chip->status_change_work);
 	}
+}
+
+static int update_soc_period_ms = 20000;
+
+static void update_soc_work(struct work_struct *work)
+{
+        struct fg_chip *chip = container_of(work, struct fg_chip,
+                                            update_soc_work.work);
+	int msoc, rc = 0;
+
+	rc = fg_get_prop_capacity(chip,&msoc);
+	if (rc < 0) {
+                pr_err("Error in getting capacity, rc=%d\n", rc);
+                goto resched;
+        }
+
+	if (msoc != chip->pre_msoc) {
+                chip->pre_msoc = msoc;
+		if (chip->fg_psy)
+			power_supply_changed(chip->fg_psy);
+        }
+resched:
+	 schedule_delayed_work(&chip->update_soc_work,
+			msecs_to_jiffies(update_soc_period_ms));
 }
 
 static void sram_dump_work(struct work_struct *work)
@@ -3872,14 +3908,6 @@ static int fg_notifier_cb(struct notifier_block *nb,
 	struct power_supply *psy = data;
 	struct fg_chip *chip = container_of(nb, struct fg_chip, nb);
 
-	spin_lock(&chip->suspend_lock);
-	if (chip->suspended) {
-		/* Return if we are still suspended */
-		spin_unlock(&chip->suspend_lock);
-		return NOTIFY_OK;
-	}
-	spin_unlock(&chip->suspend_lock);
-
 	if (event != PSY_EVENT_PROP_CHANGED)
 		return NOTIFY_OK;
 
@@ -4204,35 +4232,6 @@ static int fg_hw_init(struct fg_chip *chip)
 			ESR_PULL_DOWN_MODE_MASK, val);
 		if (rc < 0) {
 			pr_err("Error in writing esr_pull_down, rc=%d\n", rc);
-			return rc;
-		}
-	}
-
-	if (chip->dt.ki_coeff_low_dischg != -EINVAL) {
-		fg_encode(chip->sp, FG_SRAM_KI_COEFF_LOW_DISCHG,
-			chip->dt.ki_coeff_low_dischg, &val);
-		rc = fg_sram_write(chip,
-				chip->sp[FG_SRAM_KI_COEFF_LOW_DISCHG].addr_word,
-				chip->sp[FG_SRAM_KI_COEFF_LOW_DISCHG].addr_byte,
-				&val, chip->sp[FG_SRAM_KI_COEFF_LOW_DISCHG].len,
-				FG_IMA_DEFAULT);
-		if (rc < 0) {
-			pr_err("Error in writing ki_coeff_low_dischg, rc=%d\n",
-				rc);
-			return rc;
-		}
-	}
-
-	if (chip->dt.ki_coeff_hi_chg != -EINVAL) {
-		fg_encode(chip->sp, FG_SRAM_KI_COEFF_HI_CHG,
-			chip->dt.ki_coeff_hi_chg, &val);
-		rc = fg_sram_write(chip,
-				chip->sp[FG_SRAM_KI_COEFF_HI_CHG].addr_word,
-				chip->sp[FG_SRAM_KI_COEFF_HI_CHG].addr_byte,
-				&val, chip->sp[FG_SRAM_KI_COEFF_HI_CHG].len,
-				FG_IMA_DEFAULT);
-		if (rc < 0) {
-			pr_err("Error in writing ki_coeff_hi_chg, rc=%d\n", rc);
 			return rc;
 		}
 	}
@@ -4698,16 +4697,6 @@ static int fg_parse_ki_coefficients(struct fg_chip *chip)
 	if (!rc)
 		chip->dt.ki_coeff_full_soc_dischg = temp;
 
-	chip->dt.ki_coeff_hi_chg = -EINVAL;
-	rc = of_property_read_u32(node, "qcom,ki-coeff-hi-chg", &temp);
-	if (!rc)
-		chip->dt.ki_coeff_hi_chg = temp;
-
-	chip->dt.ki_coeff_low_dischg = -EINVAL;
-	rc = of_property_read_u32(node, "qcom,ki-coeff-low-dischg", &temp);
-	if (!rc)
-		chip->dt.ki_coeff_low_dischg = temp;
-
 	rc = fg_parse_dt_property_u32_array(node, "qcom,ki-coeff-soc-dischg",
 		chip->dt.ki_coeff_soc, KI_COEFF_SOC_LEVELS);
 	if (rc < 0)
@@ -4770,8 +4759,8 @@ static int fg_parse_ki_coefficients(struct fg_chip *chip)
 #define DEFAULT_ESR_FLT_TEMP_DECIDEGC	100
 #define DEFAULT_ESR_TIGHT_FLT_UPCT	3907
 #define DEFAULT_ESR_BROAD_FLT_UPCT	99610
-#define DEFAULT_ESR_TIGHT_LT_FLT_UPCT	30000
-#define DEFAULT_ESR_BROAD_LT_FLT_UPCT	30000
+#define DEFAULT_ESR_TIGHT_LT_FLT_UPCT	48829
+#define DEFAULT_ESR_BROAD_LT_FLT_UPCT	148438
 #define DEFAULT_ESR_CLAMP_MOHMS		20
 #define DEFAULT_ESR_PULSE_THRESH_MA	110
 #define DEFAULT_ESR_MEAS_CURR_MA	120
@@ -5256,7 +5245,6 @@ static int fg_gen3_probe(struct platform_device *pdev)
 	mutex_init(&chip->ttf.lock);
 	mutex_init(&chip->charge_full_lock);
 	mutex_init(&chip->qnovo_esr_ctrl_lock);
-	spin_lock_init(&chip->suspend_lock);
 	init_completion(&chip->soc_update);
 	init_completion(&chip->soc_ready);
 	INIT_DELAYED_WORK(&chip->profile_load_work, profile_load_work);
@@ -5264,6 +5252,7 @@ static int fg_gen3_probe(struct platform_device *pdev)
 	INIT_WORK(&chip->status_change_work, status_change_work);
 	INIT_DELAYED_WORK(&chip->ttf_work, ttf_work);
 	INIT_DELAYED_WORK(&chip->sram_dump_work, sram_dump_work);
+	INIT_DELAYED_WORK(&chip->update_soc_work, update_soc_work);
 
 	rc = fg_memif_init(chip);
 	if (rc < 0) {
@@ -5342,6 +5331,7 @@ static int fg_gen3_probe(struct platform_device *pdev)
 
 	device_init_wakeup(chip->dev, true);
 	schedule_delayed_work(&chip->profile_load_work, 0);
+	schedule_delayed_work(&chip->update_soc_work, msecs_to_jiffies(500));
 
 	pr_debug("FG GEN3 driver probed successfully\n");
 	return 0;
@@ -5355,15 +5345,12 @@ static int fg_gen3_suspend(struct device *dev)
 	struct fg_chip *chip = dev_get_drvdata(dev);
 	int rc;
 
-	spin_lock(&chip->suspend_lock);
-	chip->suspended = true;
-	spin_unlock(&chip->suspend_lock);
-
 	rc = fg_esr_timer_config(chip, true);
 	if (rc < 0)
 		pr_err("Error in configuring ESR timer, rc=%d\n", rc);
 
 	cancel_delayed_work_sync(&chip->ttf_work);
+	cancel_delayed_work(&chip->update_soc_work);
 	if (fg_sram_dump)
 		cancel_delayed_work_sync(&chip->sram_dump_work);
 	return 0;
@@ -5379,19 +5366,10 @@ static int fg_gen3_resume(struct device *dev)
 		pr_err("Error in configuring ESR timer, rc=%d\n", rc);
 
 	schedule_delayed_work(&chip->ttf_work, 0);
+	schedule_delayed_work(&chip->update_soc_work, msecs_to_jiffies(500));
 	if (fg_sram_dump)
 		schedule_delayed_work(&chip->sram_dump_work,
 				msecs_to_jiffies(fg_sram_dump_period_ms));
-
-	if (!work_pending(&chip->status_change_work)) {
-		pm_stay_awake(chip->dev);
-		schedule_work(&chip->status_change_work);
-	}
-
-	spin_lock(&chip->suspend_lock);
-	chip->suspended = false;
-	spin_unlock(&chip->suspend_lock);
-
 	return 0;
 }
 

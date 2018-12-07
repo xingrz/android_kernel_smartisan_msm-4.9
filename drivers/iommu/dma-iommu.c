@@ -145,11 +145,12 @@ static int iommu_dma_arm_smmu_errata_init(struct iommu_domain *domain)
 	if (vmid >= VMID_LAST || vmid < 0)
 		vmid = VMID_HLOS;
 
-	cookie->min_iova_align = (min_iova_align) ? ARM_SMMU_MIN_IOVA_ALIGN :
-		PAGE_SIZE;
+	cookie->min_iova_align = (min_iova_align) ?
+		ARM_SMMU_MIN_IOVA_ALIGN:PAGE_SIZE;
 
-	if (force_iova_guard_page)
+	if (force_iova_guard_page) {
 		cookie->force_guard_page_len = PAGE_SIZE;
+	}
 
 	cookie->guard_page =
 		arm_smmu_errata_get_guard_page(vmid);

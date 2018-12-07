@@ -54,11 +54,13 @@ struct sde_encoder_hw_resources {
 /**
  * sde_encoder_kickoff_params - info encoder requires at kickoff
  * @inline_rotate_prefill: number of lines to prefill for inline rotation
+ * @is_primary: set to true if the display is primary display
  * @affected_displays:  bitmask, bit set means the ROI of the commit lies within
  *                      the bounds of the physical display at the bit index
  */
 struct sde_encoder_kickoff_params {
 	u32 inline_rotate_prefill;
+	u32 is_primary;
 	unsigned long affected_displays;
 };
 
@@ -234,6 +236,15 @@ void sde_encoder_prepare_commit(struct drm_encoder *drm_enc);
  * @Return:     true if successful in updating the encoder structure
  */
 int sde_encoder_update_caps_for_cont_splash(struct drm_encoder *encoder);
+
+/**
+ * sde_encoder_esd_failure - update sde encoder state for esd timeout
+ *      This event flows from dsi, sde_connector to sde_encoder.
+ *      TODO: manage the event at sde_kms level for forward processing.
+ * @drm_enc:    Pointer to drm encoder structure
+ * @Return:     true if successful in updating the encoder structure
+ */
+int sde_encoder_esd_failure(struct drm_encoder *enc);
 
 /**
  * sde_encoder_display_failure_notification - update sde encoder state for

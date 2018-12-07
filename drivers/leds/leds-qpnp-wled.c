@@ -210,7 +210,7 @@
 #define QPNP_WLED_SEC_ACCESS_REG(b)    (b + 0xD0)
 #define QPNP_WLED_SEC_UNLOCK           0xA5
 
-#define QPNP_WLED_MAX_STRINGS		4
+#define QPNP_WLED_MAX_STRINGS		2
 #define QPNP_PM660_WLED_MAX_STRINGS	3
 #define WLED_MAX_LEVEL_4095		4095
 #define QPNP_WLED_RAMP_DLY_MS		20
@@ -626,8 +626,8 @@ static int qpnp_wled_module_en(struct qpnp_wled *wled,
 			return rc;
 
 		if (wled->ovp_irq > 0 && wled->ovp_irq_disabled) {
-			enable_irq(wled->ovp_irq);
-			wled->ovp_irq_disabled = false;
+			//enable_irq(wled->ovp_irq);
+			//wled->ovp_irq_disabled = false;
 		}
 	} else {
 		if (wled->ovp_irq > 0 && !wled->ovp_irq_disabled) {
@@ -1384,7 +1384,7 @@ static irqreturn_t qpnp_wled_ovp_irq_handler(int irq, void *_wled)
 	}
 
 	if (fault_sts & (QPNP_WLED_OVP_FAULT_BIT | QPNP_WLED_ILIM_FAULT_BIT))
-		pr_err("WLED OVP fault detected, int_sts=%x fault_sts= %x\n",
+		pr_debug("WLED OVP fault detected, int_sts=%x fault_sts= %x\n",
 			int_sts, fault_sts);
 
 	if (fault_sts & QPNP_WLED_OVP_FAULT_BIT) {

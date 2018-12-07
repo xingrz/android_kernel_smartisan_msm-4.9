@@ -53,8 +53,6 @@
 #define TZ_PIL_AUTH_QDSP6_PROC 1
 #define ADSP_MMAP_HEAP_ADDR 4
 #define ADSP_MMAP_REMOTE_HEAP_ADDR 8
-#define FASTRPC_DMAHANDLE_NOMAP (16)
-
 #define FASTRPC_ENOSUCH 39
 #define VMID_SSC_Q6     5
 #define VMID_ADSP_Q6    6
@@ -565,9 +563,6 @@ static void fastrpc_mmap_free(struct fastrpc_mmap *map, uint32_t flags)
 			dma_free_coherent(me->dev, map->size,
 				(void *)map->va, (dma_addr_t)map->phys);
 		}
-	} else if (map->flags == FASTRPC_DMAHANDLE_NOMAP) {
-		if (!IS_ERR_OR_NULL(map->handle))
-			ion_free(fl->apps->client, map->handle);
 	} else {
 		int destVM[1] = {VMID_HLOS};
 		int destVMperm[1] = {PERM_READ | PERM_WRITE | PERM_EXEC};
@@ -647,26 +642,6 @@ static int fastrpc_mmap_create(struct fastrpc_file *fl, int fd,
 		map->phys = (uintptr_t)region_phys;
 		map->size = len;
 		map->va = (uintptr_t)region_vaddr;
-	} else if (mflags == FASTRPC_DMAHANDLE_NOMAP) {
-		ion_phys_addr_t iphys;
-
-		VERIFY(err, !IS_ERR_OR_NULL(map->handle =
-				ion_import_dma_buf_fd(fl->apps->client, fd)));
-		if (err)
-			goto bail;
-
-		map->uncached = 1;
-		map->buf = NULL;
-		map->attach = NULL;
-		map->table = NULL;
-		map->va = 0;
-		map->phys = 0;
-
-		err = ion_phys(fl->apps->client, map->handle,
-			&iphys, &map->size);
-		if (err)
-			goto bail;
-		map->phys = (uint64_t)iphys;
 	} else {
 		if (map->attr && (map->attr & FASTRPC_ATTR_KEEP_MAP)) {
 			pr_info("adsprpc: buffer mapped with persist attr %x\n",
@@ -1216,12 +1191,8 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 	handles = REMOTE_SCALARS_INHANDLES(sc) + REMOTE_SCALARS_OUTHANDLES(sc);
 	mutex_lock(&ctx->fl->fl_map_mutex);
 	for (i = bufs; i < bufs + handles; i++) {
-		int dmaflags = 0;
-
-		if (ctx->attrs && (ctx->attrs[i] & FASTRPC_ATTR_NOMAP))
-			dmaflags = FASTRPC_DMAHANDLE_NOMAP;
 		VERIFY(err, !fastrpc_mmap_create(ctx->fl, ctx->fds[i],
-			FASTRPC_ATTR_NOVA, 0, 0, dmaflags, &ctx->maps[i]));
+				FASTRPC_ATTR_NOVA, 0, 0, 0, &ctx->maps[i]));
 		if (err) {
 			mutex_unlock(&ctx->fl->fl_map_mutex);
 			goto bail;
@@ -1386,18 +1357,9 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 		if (map && (map->attr & FASTRPC_ATTR_COHERENT))
 			continue;
 
-		if (rpra && rpra[i].buf.len && ctx->overps[oix]->mstart) {
-			if (map && map->handle)
-				msm_ion_do_cache_op(ctx->fl->apps->client,
-					map->handle,
-					uint64_to_ptr(rpra[i].buf.pv),
-					rpra[i].buf.len,
-					ION_IOC_CLEAN_INV_CACHES);
-			else
-				dmac_flush_range(uint64_to_ptr(rpra[i].buf.pv),
-					uint64_to_ptr(rpra[i].buf.pv
-						+ rpra[i].buf.len));
-		}
+		if (rpra[i].buf.len && ctx->overps[oix]->mstart)
+			dmac_flush_range(uint64_to_ptr(rpra[i].buf.pv),
+			uint64_to_ptr(rpra[i].buf.pv + rpra[i].buf.len));
 	}
 	PERF_END);
 	for (i = bufs; rpra && i < bufs + handles; i++) {
@@ -1406,6 +1368,11 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 		rpra[i].dma.offset = (uint32_t)(uintptr_t)lpra[i].buf.pv;
 	}
 
+	if (!ctx->fl->sctx->smmu.coherent) {
+		PERF(ctx->fl->profile, ctx->fl->perf.flush,
+		dmac_flush_range((char *)rpra, (char *)rpra + ctx->used);
+		PERF_END);
+	}
  bail:
 	return err;
 }
@@ -1491,33 +1458,14 @@ static void inv_args_pre(struct smq_invoke_ctx *ctx)
 		if (buf_page_start(ptr_to_uint64((void *)rpra)) ==
 				buf_page_start(rpra[i].buf.pv))
 			continue;
-		if (!IS_CACHE_ALIGNED((uintptr_t)
-				uint64_to_ptr(rpra[i].buf.pv))) {
-			if (map && map->handle)
-				msm_ion_do_cache_op(ctx->fl->apps->client,
-					map->handle,
-					uint64_to_ptr(rpra[i].buf.pv),
-					sizeof(uintptr_t),
-					ION_IOC_CLEAN_INV_CACHES);
-			else
-				dmac_flush_range(
-					uint64_to_ptr(rpra[i].buf.pv), (char *)
-					uint64_to_ptr(rpra[i].buf.pv + 1));
-		}
-
+		if (!IS_CACHE_ALIGNED((uintptr_t)uint64_to_ptr(rpra[i].buf.pv)))
+			dmac_flush_range(uint64_to_ptr(rpra[i].buf.pv),
+				(char *)(uint64_to_ptr(rpra[i].buf.pv + 1)));
 		end = (uintptr_t)uint64_to_ptr(rpra[i].buf.pv +
 							rpra[i].buf.len);
-		if (!IS_CACHE_ALIGNED(end)) {
-			if (map && map->handle)
-				msm_ion_do_cache_op(ctx->fl->apps->client,
-						map->handle,
-						uint64_to_ptr(end),
-						sizeof(uintptr_t),
-						ION_IOC_CLEAN_INV_CACHES);
-			else
-				dmac_flush_range((char *)end,
-					(char *)end + 1);
-		}
+		if (!IS_CACHE_ALIGNED(end))
+			dmac_flush_range((char *)end,
+				(char *)end + 1);
 	}
 }
 
@@ -1526,6 +1474,7 @@ static void inv_args(struct smq_invoke_ctx *ctx)
 	int i, inbufs, outbufs;
 	uint32_t sc = ctx->sc;
 	remote_arg64_t *rpra = ctx->rpra;
+	int used = ctx->used;
 
 	inbufs = REMOTE_SCALARS_INBUFS(sc);
 	outbufs = REMOTE_SCALARS_OUTBUFS(sc);
@@ -1556,6 +1505,8 @@ static void inv_args(struct smq_invoke_ctx *ctx)
 						 + rpra[i].buf.len));
 	}
 
+	if (rpra)
+		dmac_inv_range(rpra, (char *)rpra + used);
 }
 
 static int fastrpc_invoke_send(struct smq_invoke_ctx *ctx,
@@ -2417,7 +2368,8 @@ static int fastrpc_file_free(struct fastrpc_file *fl)
 	spin_unlock(&fl->apps->hlock);
 
 	if (!fl->sctx) {
-		goto bail;
+		kfree(fl);
+		return 0;
 	}
 	spin_lock(&fl->hlock);
 	fl->file_close = 1;
@@ -2436,9 +2388,7 @@ static int fastrpc_file_free(struct fastrpc_file *fl)
 		fastrpc_session_free(&fl->apps->channel[cid], fl->sctx);
 	if (fl->secsctx)
 		fastrpc_session_free(&fl->apps->channel[cid], fl->secsctx);
-bail:
 	mutex_destroy(&fl->fl_map_mutex);
-	mutex_destroy(&fl->map_mutex);
 	kfree(fl);
 	return 0;
 }
@@ -2452,6 +2402,7 @@ static int fastrpc_device_release(struct inode *inode, struct file *file)
 			pm_qos_remove_request(&fl->pm_qos_req);
 		if (fl->debugfs_file != NULL)
 			debugfs_remove(fl->debugfs_file);
+		mutex_destroy(&fl->map_mutex);
 		fastrpc_file_free(fl);
 		file->private_data = NULL;
 	}
@@ -2911,28 +2862,6 @@ static long fastrpc_device_ioctl(struct file *file, unsigned int ioctl_num,
 			goto bail;
 		break;
 	case FASTRPC_IOCTL_MUNMAP:
-		K_COPY_FROM_USER(err, 0, &p.munmap, param,
-						sizeof(p.munmap));
-		if (err)
-			goto bail;
-		VERIFY(err, 0 == (err = fastrpc_internal_munmap(fl,
-							&p.munmap)));
-		if (err)
-			goto bail;
-		break;
-	case FASTRPC_IOCTL_MMAP_64:
-		K_COPY_FROM_USER(err, 0, &p.mmap, param,
-						sizeof(p.mmap));
-		if (err)
-			goto bail;
-		VERIFY(err, 0 == (err = fastrpc_internal_mmap(fl, &p.mmap)));
-		if (err)
-			goto bail;
-		K_COPY_TO_USER(err, 0, param, &p.mmap, sizeof(p.mmap));
-		if (err)
-			goto bail;
-		break;
-	case FASTRPC_IOCTL_MUNMAP_64:
 		K_COPY_FROM_USER(err, 0, &p.munmap, param,
 						sizeof(p.munmap));
 		if (err)

@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -915,11 +915,12 @@ static int fast_smmu_errata_init(struct dma_iommu_mapping *mapping)
 	if (vmid >= VMID_LAST || vmid < 0)
 		vmid = VMID_HLOS;
 
-	fast->min_iova_align = (min_iova_align) ?  ARM_SMMU_MIN_IOVA_ALIGN :
+	fast->min_iova_align = (min_iova_align) ?  ARM_SMMU_MIN_IOVA_ALIGN:
 		PAGE_SIZE;
 
-	if (force_iova_guard_page)
+	if (force_iova_guard_page) {
 		fast->force_guard_page_len = PAGE_SIZE;
+	}
 
 	fast->guard_page =
 		arm_smmu_errata_get_guard_page(vmid);

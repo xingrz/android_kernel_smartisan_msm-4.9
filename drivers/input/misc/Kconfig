@@ -814,6 +814,15 @@ config INPUT_IDEAPAD_SLIDEBAR
 	  To compile this driver as a module, choose M here: the
 	  module will be called ideapad_slidebar.
 
+config INPUT_NXU8010_RGBW
+	tristate "NXU8010 rgb sensor"
+	depends on INPUT && I2C
+	help
+	  Say Y to enable support for the NXU8010 rgb sensor driver.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called nxu8010 rgb sensor.
+
 config INPUT_SOC_BUTTON_ARRAY
 	tristate "Windows-compatible SoC Button Array"
 	depends on KEYBOARD_GPIO

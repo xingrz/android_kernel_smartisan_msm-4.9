@@ -2004,11 +2004,12 @@ bitmap_iommu_init_mapping(struct device *dev, struct dma_iommu_mapping *mapping)
 	if (vmid >= VMID_LAST || vmid < 0)
 		vmid = VMID_HLOS;
 
-	mapping->min_iova_align = (min_iova_align) ? ARM_SMMU_MIN_IOVA_ALIGN :
-		PAGE_SIZE;
+	mapping->min_iova_align = (min_iova_align) ?
+		ARM_SMMU_MIN_IOVA_ALIGN:PAGE_SIZE;
 
-	if (force_iova_guard_page)
+	if (force_iova_guard_page) {
 		mapping->force_guard_page_len = PAGE_SIZE;
+	}
 
 	mapping->guard_page =
 		arm_smmu_errata_get_guard_page(vmid);

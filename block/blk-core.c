@@ -34,6 +34,8 @@
 #include <linux/pm_runtime.h>
 #include <linux/blk-cgroup.h>
 
+#include <trace/events/fsdbg.h>
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/block.h>
 
@@ -75,7 +77,7 @@ static void blk_clear_congested(struct request_list *rl, int sync)
 	 * flip its congestion state for events on other blkcgs.
 	 */
 	if (rl == &rl->q->root_rl)
-		clear_wb_congested(rl->q->backing_dev_info->wb.congested, sync);
+		clear_wb_congested(rl->q->backing_dev_info.wb.congested, sync);
 #endif
 }
 
@@ -86,7 +88,7 @@ static void blk_set_congested(struct request_list *rl, int sync)
 #else
 	/* see blk_clear_congested() */
 	if (rl == &rl->q->root_rl)
-		set_wb_congested(rl->q->backing_dev_info->wb.congested, sync);
+		set_wb_congested(rl->q->backing_dev_info.wb.congested, sync);
 #endif
 }
 
@@ -104,6 +106,22 @@ void blk_queue_congestion_threshold(struct request_queue *q)
 		nr = 1;
 	q->nr_congestion_off = nr;
 }
+
+/**
+ * blk_get_backing_dev_info - get the address of a queue's backing_dev_info
+ * @bdev:	device
+ *
+ * Locates the passed device's request queue and returns the address of its
+ * backing_dev_info.  This function can only be called if @bdev is opened
+ * and the return value is never NULL.
+ */
+struct backing_dev_info *blk_get_backing_dev_info(struct block_device *bdev)
+{
+	struct request_queue *q = bdev_get_queue(bdev);
+
+	return &q->backing_dev_info;
+}
+EXPORT_SYMBOL(blk_get_backing_dev_info);
 
 void blk_rq_init(struct request_queue *q, struct request *rq)
 {
@@ -569,7 +587,7 @@ void blk_cleanup_queue(struct request_queue *q)
 	blk_flush_integrity();
 
 	/* @q won't process any more request, flush async actions */
-	del_timer_sync(&q->backing_dev_info->laptop_mode_wb_timer);
+	del_timer_sync(&q->backing_dev_info.laptop_mode_wb_timer);
 	blk_sync_queue(q);
 
 	if (q->mq_ops)
@@ -580,6 +598,8 @@ void blk_cleanup_queue(struct request_queue *q)
 	if (q->queue_lock != &q->__queue_lock)
 		q->queue_lock = &q->__queue_lock;
 	spin_unlock_irq(lock);
+
+	bdi_unregister(&q->backing_dev_info);
 
 	/* @q is and will stay empty, shutdown and put */
 	blk_put_queue(q);
@@ -676,6 +696,7 @@ static void blk_rq_timed_out_timer(unsigned long data)
 struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 {
 	struct request_queue *q;
+	int err;
 
 	q = kmem_cache_alloc_node(blk_requestq_cachep,
 				gfp_mask | __GFP_ZERO, node_id);
@@ -690,17 +711,17 @@ struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 	if (!q->bio_split)
 		goto fail_id;
 
-	q->backing_dev_info = bdi_alloc_node(gfp_mask, node_id);
-	if (!q->backing_dev_info)
-		goto fail_split;
-
-	q->backing_dev_info->ra_pages =
+	q->backing_dev_info.ra_pages =
 			(VM_MAX_READAHEAD * 1024) / PAGE_SIZE;
-	q->backing_dev_info->capabilities = BDI_CAP_CGROUP_WRITEBACK;
-	q->backing_dev_info->name = "block";
+	q->backing_dev_info.capabilities = BDI_CAP_CGROUP_WRITEBACK;
+	q->backing_dev_info.name = "block";
 	q->node = node_id;
 
-	setup_timer(&q->backing_dev_info->laptop_mode_wb_timer,
+	err = bdi_init(&q->backing_dev_info);
+	if (err)
+		goto fail_split;
+
+	setup_timer(&q->backing_dev_info.laptop_mode_wb_timer,
 		    laptop_mode_timer_fn, (unsigned long) q);
 	setup_timer(&q->timeout, blk_rq_timed_out_timer, (unsigned long) q);
 	INIT_LIST_HEAD(&q->queue_head);
@@ -750,7 +771,7 @@ struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 fail_ref:
 	percpu_ref_exit(&q->q_usage_counter);
 fail_bdi:
-	bdi_put(q->backing_dev_info);
+	bdi_destroy(&q->backing_dev_info);
 fail_split:
 	bioset_free(q->bio_split);
 fail_id:
@@ -1176,7 +1197,7 @@ fail_elvpriv:
 	 * disturb iosched and blkcg but weird is bettern than dead.
 	 */
 	printk_ratelimited(KERN_WARNING "%s: dev %s: request aux data allocation failed, iosched may be disturbed\n",
-			   __func__, dev_name(q->backing_dev_info->dev));
+			   __func__, dev_name(q->backing_dev_info.dev));
 
 	rq->cmd_flags &= ~REQ_ELVPRIV;
 	rq->elv.icq = NULL;
@@ -2064,6 +2085,110 @@ out:
 }
 EXPORT_SYMBOL(generic_make_request);
 
+char* get_bio_related_filename (struct bio *bio, char* filename_buf,int len, uint32_t *pinode)
+{
+    struct inode *pIno;
+    char* filename;
+
+    if(bio->bi_io_vec == NULL){
+        strcpy(filename_buf, "bi_io_vec");
+        goto _exit;
+    }
+    if(bio->bi_io_vec->bv_page == NULL){
+        strcpy(filename_buf, "bi_io_vec->bv_page");
+        goto _exit;
+    }
+
+    if(PageMappingFlags(bio->bi_io_vec->bv_page)){
+        //printk("PageMappingFlags_bi_io_vec->bv_page");
+        pIno = bio->bi_dio_inode;
+    }
+    else
+    {
+        if(bio->bi_io_vec->bv_page->mapping == NULL){
+            strcpy(filename_buf, "bi_io_vec->bv_page->mapping");
+            goto _exit;
+        }
+        if(bio->bi_io_vec->bv_page->mapping->host == NULL){
+            strcpy(filename_buf, "bi_io_vec->bv_page->mapping->host");
+            goto _exit;
+        }
+        pIno = bio->bi_io_vec->bv_page->mapping->host;
+    }
+    //printk("inode: %lu\n", pinode->i_ino);
+    *pinode = pIno->i_ino;
+    filename=getfullpath(pIno, filename_buf, len);
+    //strcpy(filename, "FILENAME");
+    return filename;
+
+_exit:
+    return filename_buf;
+}
+static void fs_log_block(int rw, unsigned int count, struct bio *bio)
+{
+	char b[BDEVNAME_SIZE];
+	char filename_buf[512], *filename;
+	uint32_t inode=0;
+
+	filename = get_bio_related_filename(bio, filename_buf,sizeof(filename_buf),&inode);
+/*
+	printk(KERN_DEBUG "%s(%d): %s block %Lu on %s (%u sectors) (inode:%d, name:%s)\n",
+		current->comm, current->pid,
+		(rw & WRITE) ? "WRITE" : "READ",
+		(unsigned long long)bio->bi_iter.bi_sector,
+		bdevname(bio->bi_bdev, b),
+		count, inode, filename);
+*/
+	if(filename==NULL){
+		trace_fsdbg_blk_rw((rw & WRITE) ? "WRITE" : "READ", inode, "NULL", count, (u64)(bio->bi_iter.bi_sector), bdevname(bio->bi_bdev, b));
+	}else{
+		trace_fsdbg_blk_rw((rw & WRITE) ? "WRITE" : "READ", inode, filename, count, (u64)(bio->bi_iter.bi_sector), bdevname(bio->bi_bdev, b));
+	}
+
+}
+
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+static void fsdbg_rw_count(int rw, unsigned int count, struct bio *bio)
+{
+	struct inode *pIno;
+
+	if(bio->bi_io_vec == NULL){
+		return;
+	}
+	if(bio->bi_io_vec->bv_page == NULL){
+		return;
+	}
+
+	if(PageMappingFlags(bio->bi_io_vec->bv_page)){
+		pIno = bio->bi_dio_inode;
+	}else{
+		if(bio->bi_io_vec->bv_page->mapping == NULL){
+			return;
+		}
+		if(bio->bi_io_vec->bv_page->mapping->host == NULL){
+			return;
+		}
+		pIno = bio->bi_io_vec->bv_page->mapping->host;
+	}
+
+	mutex_lock(&pIno->i_count_mutex);
+	if(pIno->i_filename == UNINIT_FILE_NAME)
+	{
+		pIno->i_filename = getfullpath(pIno, pIno->i_fullnambuf, sizeof(pIno->i_fullnambuf));
+	}
+	if(rw & WRITE){
+		pIno->i_write_times +=1;
+		pIno->i_write_count +=count;
+		pr_debug("ino=%lu, i_write_times=%llu, i_write_count=%llu\n", pIno->i_ino, pIno->i_write_times, pIno->i_write_count);
+	}else{
+		pIno->i_read_times +=1;
+		pIno->i_read_count +=count;
+		pr_debug("ino=%lu, i_read_times=%llu, i_read_count=%llu\n", pIno->i_ino, pIno->i_read_times, pIno->i_read_count);
+	}
+	mutex_unlock(&pIno->i_count_mutex);
+}
+#endif
+
 /**
  * submit_bio - submit a bio to the block device layer for I/O
  * @bio: The &struct bio which describes the I/O
@@ -2103,6 +2228,19 @@ blk_qc_t submit_bio(struct bio *bio)
 				bdevname(bio->bi_bdev, b),
 				count);
 		}
+
+		if (unlikely(fs_dump&FS_LOG_BLOCK)) {
+			fs_log_block(op_is_write(bio_op(bio)), count, bio);
+		}
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+		fsdbg_rw_count(op_is_write(bio_op(bio)), count, bio);
+#endif
+
+#ifdef CONFIG_IO_MONITOR
+	if(iom_mask&IOM_BLOCK){
+		iom_bio_start(bio);
+	}
+#endif
 	}
 
 	return generic_make_request(bio);
@@ -2718,7 +2856,7 @@ void blk_finish_request(struct request *req, int error)
 	BUG_ON(blk_queued_rq(req));
 
 	if (unlikely(laptop_mode) && req->cmd_type == REQ_TYPE_FS)
-		laptop_io_completion(req->q->backing_dev_info);
+		laptop_io_completion(&req->q->backing_dev_info);
 
 	blk_delete_timer(req);
 

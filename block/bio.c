@@ -1328,7 +1328,7 @@ struct bio *bio_map_user_iov(struct request_queue *q,
 
 			if (len <= 0)
 				break;
-			
+
 			if (bytes > len)
 				bytes = len;
 
@@ -1777,8 +1777,16 @@ again:
 		goto again;
 	}
 
-	if (bio->bi_end_io)
+	if (bio->bi_end_io){
+#ifdef CONFIG_IO_MONITOR
+		if(iom_mask&IOM_BLOCK){
+			if (bio_has_data(bio)) {
+				iom_bio_end(bio);
+			}
+		}
+#endif
 		bio->bi_end_io(bio);
+	}
 }
 EXPORT_SYMBOL(bio_endio);
 

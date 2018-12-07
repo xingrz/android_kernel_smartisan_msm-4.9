@@ -26,10 +26,14 @@
 #include <linux/quotaops.h>
 #include <linux/pagevec.h>
 #include <linux/uio.h>
+#include <linux/kfifo.h>
+#include <linux/mutex.h>
+
 #include "ext4.h"
 #include "ext4_jbd2.h"
 #include "xattr.h"
 #include "acl.h"
+#include <trace/events/fsdbg.h>
 
 /*
  * Called when an inode is released. Note that this is different
@@ -88,6 +92,111 @@ ext4_unaligned_aio(struct inode *inode, struct iov_iter *from, loff_t pos)
 	return 0;
 }
 
+static void fs_log_ext4_rw(struct kiocb *iocb, loff_t pos, size_t length, ktime_t ts_enter, int rw)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+	char fullname_buf[512];
+	char rw_str[16];
+	char *fullname=NULL;
+	int duration;
+	ktime_t ts_exit, duration_ktime;
+
+	fullname=getfullpath(inode,fullname_buf,sizeof(fullname_buf));
+	ts_exit = ktime_get();
+	duration_ktime = ktime_sub(ts_exit, ts_enter);
+	duration = duration_ktime.tv64/1000;
+
+	if(rw)
+		strcpy(rw_str, "WRITE");
+	else
+		strcpy(rw_str, "READ");
+
+	if(fullname)
+	{
+		// not dump logd/* files
+		if(!strstr(fullname, "logd"))
+		{
+			//printk(KERN_DEBUG "%s(%d): %s, f2fs inode: %lu, name: %s, lenght: %lu, pos: %lld, duration: %d\n", current->comm, current->pid, rw_str, inode->i_ino, fullname, length, pos, duration);
+			trace_fsdbg_ext4_rw(rw_str, inode->i_ino, fullname, length, pos, duration);
+		}
+	}
+	else
+	{
+		//printk(KERN_DEBUG "%s(%d): %s, f2fs inode: %lu, name: %s, lenght: %lu, pos: %lld, duration: %d\n", current->comm, current->pid, rw_str, inode->i_ino, "NULL", length, pos, duration);
+		trace_fsdbg_ext4_rw(rw_str, inode->i_ino, "NULL", length, pos, duration);
+	}
+
+}
+
+#ifdef CONFIG_IO_MONITOR
+extern struct kfifo iom_log_fifo_fs;
+extern struct mutex iom_log_fifo_lock_fs;
+
+static void iom_ext4_rw(struct kiocb *iocb, loff_t pos, size_t length, ktime_t ts_enter, int rw)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+	char fullname_buf[512];
+	char line_buf[512];
+	char rw_str[16];
+	char *fullname=NULL;
+	int duration;
+	ktime_t ts_exit, duration_ktime;
+	int fifo_len, size, len;
+
+	// get process time
+	ts_exit = ktime_get();
+	duration_ktime = ktime_sub(ts_exit, ts_enter);
+	if(duration_ktime.tv64 < iom_threshold)
+		return;
+
+	// save log into fifo
+	fullname=getfullpath(inode,fullname_buf,sizeof(fullname_buf));
+	duration = duration_ktime.tv64/1000000;
+
+	if(rw)
+		strcpy(rw_str, "WRITE");
+	else
+		strcpy(rw_str, "READ");
+
+	ts_enter.tv64 /= 1000;
+	if(fullname)
+	{
+		snprintf(line_buf, sizeof(line_buf), "[%5llu.%06llu] %s(%d): EXT4, %s, pos=%llu, len=%zd, duration=%d, ino=%lu, name=%s\n",
+			ts_enter.tv64/1000000, ts_enter.tv64%1000000, current->comm, current->pid, rw_str, pos, length, duration, inode->i_ino, fullname);
+	}
+	else
+	{
+		snprintf(line_buf, sizeof(line_buf), "[%5llu.%06llu] %s(%d): EXt4, %s, pos=%llu, len=%zd, duration=%d, ino=%lu, name=%s\n",
+			ts_enter.tv64/1000000, ts_enter.tv64%1000000, current->comm, current->pid, rw_str, pos, length, duration, inode->i_ino, "NULL");
+	}
+	mutex_lock(&iom_log_fifo_lock_fs);
+	kfifo_in(&iom_log_fifo_fs, line_buf, strlen(line_buf));
+	mutex_unlock(&iom_log_fifo_lock_fs);
+	// If fifo full discard old log
+	fifo_len = kfifo_len(&iom_log_fifo_fs);
+	if(fifo_len > IOM_FIFO_SIZE - IOM_FIFO_RSV_SIZE)
+	{
+		len = IOM_FIFO_RSV_SIZE;
+		while(len > 0)
+		{
+			mutex_lock(&iom_log_fifo_lock_fs);
+			size = kfifo_out(&iom_log_fifo_fs, line_buf, sizeof(line_buf));
+			mutex_unlock(&iom_log_fifo_lock_fs);
+			if(size < 0)
+			{
+				break;
+			}
+			else
+			{
+				len -= sizeof(line_buf);
+			}
+		}
+	}
+
+
+}
+
+#endif
 static ssize_t
 ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
@@ -96,6 +205,9 @@ ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	int unaligned_aio = 0;
 	int overwrite = 0;
 	ssize_t ret;
+	ktime_t ts_enter={0};
+	loff_t w_pos=0;
+	size_t w_length=0;
 
 	inode_lock(inode);
 	ret = generic_write_checks(iocb, from);
@@ -162,16 +274,73 @@ ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		}
 	}
 
+	if (unlikely(fs_dump&FS_LOG_EXT4_RW)) {
+		ts_enter = ktime_get();
+		w_pos = iocb->ki_pos;
+		w_length = iov_iter_count(from);
+	}
+
+#ifdef CONFIG_IO_MONITOR
+	if(iom_mask&IOM_EXT4_RW){
+		ts_enter = ktime_get();
+		w_pos = iocb->ki_pos;
+		w_length = iov_iter_count(from);
+	}
+#endif
+
 	ret = __generic_file_write_iter(iocb, from);
 	inode_unlock(inode);
 
 	if (ret > 0)
 		ret = generic_write_sync(iocb, ret);
 
+#ifdef CONFIG_IO_MONITOR
+	if(iom_mask&IOM_EXT4_RW){
+		iom_ext4_rw(iocb, w_pos, w_length, ts_enter, 1);
+	}
+#endif
+
+	if (unlikely(fs_dump&FS_LOG_EXT4_RW)) {
+		fs_log_ext4_rw(iocb, w_pos, w_length, ts_enter, 1);
+	}
 	return ret;
 
 out:
 	inode_unlock(inode);
+	return ret;
+}
+
+static ssize_t ext4_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
+{
+	ssize_t ret;
+	ktime_t ts_enter={0};
+	loff_t pos=0;
+	size_t length=0;
+
+	if (unlikely(fs_dump&FS_LOG_EXT4_RW)) {
+		ts_enter = ktime_get();
+		pos = iocb->ki_pos;
+		length = iov_iter_count(iter);
+	}
+#ifdef CONFIG_IO_MONITOR
+	if(iom_mask&IOM_EXT4_RW){
+		ts_enter = ktime_get();
+		pos = iocb->ki_pos;
+		length = iov_iter_count(iter);
+	}
+#endif
+
+	ret = generic_file_read_iter(iocb, iter);
+
+#ifdef CONFIG_IO_MONITOR
+	if(iom_mask&IOM_EXT4_RW){
+		iom_ext4_rw(iocb, pos, length, ts_enter, 0);
+	}
+#endif
+	if (unlikely(fs_dump&FS_LOG_EXT4_RW)) {
+		fs_log_ext4_rw(iocb, pos, length, ts_enter, 0);
+	}
+
 	return ret;
 }
 
@@ -668,7 +837,7 @@ loff_t ext4_llseek(struct file *file, loff_t offset, int whence)
 
 const struct file_operations ext4_file_operations = {
 	.llseek		= ext4_llseek,
-	.read_iter	= generic_file_read_iter,
+	.read_iter	= ext4_file_read_iter,
 	.write_iter	= ext4_file_write_iter,
 	.unlocked_ioctl = ext4_ioctl,
 #ifdef CONFIG_COMPAT

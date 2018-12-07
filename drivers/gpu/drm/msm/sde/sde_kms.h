@@ -111,7 +111,7 @@
 #define SDE_KMS_OPS_PREPARE_PLANE_FB                       BIT(3)
 
 /* ESD status check interval in miliseconds */
-#define STATUS_CHECK_INTERVAL_MS 5000
+#define STATUS_CHECK_INTERVAL_MS 2000
 
 /*
  * struct sde_irq_callback - IRQ callback handlers

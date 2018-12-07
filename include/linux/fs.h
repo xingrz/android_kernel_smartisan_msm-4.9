@@ -69,6 +69,85 @@ extern int leases_enable, lease_break_time;
 extern int sysctl_protected_symlinks;
 extern int sysctl_protected_hardlinks;
 
+// used for fs, block, emmc, ufs log control
+extern unsigned int fs_dump;
+enum {
+    FS_LOG_BLOCK =             1<<0,	                   /*Block layer log*/
+    FS_LOG_F2FS_RW =           1<<1,	                   /*F2FS layer rw log*/
+    FS_LOG_EXT4_RW =           1<<2,	                   /*EXT4 layer write log*/
+    FS_LOG_UFS_RW =            1<<3,	                   /*UFS layer rw log*/
+    FS_LOG_INOTIFY_EVENT =     1<<4,	                   /*Inotify event log*/
+    FS_LOG_FLAG_FILE_DEBUG =   1<<5,	                   /*Use flag file to debug fs issue*/
+    FS_LOG_VFS_SDCARDFS_FUSE_RW =  1<<6,	               /*Sdcardfs/fuse layer rw*/
+    FS_LOG_VFS_F2FS_RW =           1<<7,	               /*f2fs layer rw*/
+    FS_LOG_VFS_EXT4_RW =           1<<8,	               /*ext4 layer rw*/
+
+    FS_LOG_UNDEF_9 =           1<<9,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_10 =          1<<10,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_11 =          1<<11,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_12 =          1<<12,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_13 =          1<<13,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_14 =          1<<14,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_15 =          1<<15,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_16 =          1<<16,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_17 =          1<<17,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_18 =          1<<18,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_19 =          1<<19,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_20 =          1<<20,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_21 =          1<<21,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_22 =          1<<22,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_23 =          1<<23,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_24 =          1<<24,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_25 =          1<<25,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_26 =          1<<26,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_27 =          1<<27,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_28 =          1<<28,	                   /*Undef bit for future use*/
+    FS_LOG_UNDEF_29 =          1<<29,	                   /*Undef bit for future use*/
+    FS_LOG_FTRACE_PRINT =      1<<30,	                   /* print in ftrace */
+    FS_LOG_UNDEF_LAST =        1<<31	                   /*Undef bit for future use*/
+};
+
+#ifdef CONFIG_IO_MONITOR
+extern unsigned int iom_mask;
+enum {
+    IOM_BLOCK =             1<<0,	                   /*Block layer log*/
+    IOM_F2FS_RW =           1<<1,	                   /*F2FS layer rw log*/
+    IOM_EXT4_RW =           1<<2,	                   /*EXT4 layer write log*/
+
+    IOM_UNDEF_3 =           1<<3,	                   /*Undef bit for future use*/
+    IOM_UNDEF_4 =          1<<4,	                   /*Undef bit for future use*/
+    IOM_UNDEF_5 =          1<<5,	                   /*Undef bit for future use*/
+    IOM_UNDEF_6 =          1<<6,	                   /*Undef bit for future use*/
+    IOM_UNDEF_7 =          1<<7,	                   /*Undef bit for future use*/
+    IOM_UNDEF_8 =          1<<8,	                   /*Undef bit for future use*/
+    IOM_UNDEF_9 =           1<<9,	                   /*Undef bit for future use*/
+    IOM_UNDEF_10 =          1<<10,	                   /*Undef bit for future use*/
+    IOM_UNDEF_11 =          1<<11,	                   /*Undef bit for future use*/
+    IOM_UNDEF_12 =          1<<12,	                   /*Undef bit for future use*/
+    IOM_UNDEF_13 =          1<<13,	                   /*Undef bit for future use*/
+    IOM_UNDEF_14 =          1<<14,	                   /*Undef bit for future use*/
+    IOM_UNDEF_15 =          1<<15,	                   /*Undef bit for future use*/
+    IOM_UNDEF_16 =          1<<16,	                   /*Undef bit for future use*/
+    IOM_UNDEF_17 =          1<<17,	                   /*Undef bit for future use*/
+    IOM_UNDEF_18 =          1<<18,	                   /*Undef bit for future use*/
+    IOM_UNDEF_19 =          1<<19,	                   /*Undef bit for future use*/
+    IOM_UNDEF_20 =          1<<20,	                   /*Undef bit for future use*/
+    IOM_UNDEF_21 =          1<<21,	                   /*Undef bit for future use*/
+    IOM_UNDEF_22 =          1<<22,	                   /*Undef bit for future use*/
+    IOM_UNDEF_23 =          1<<23,	                   /*Undef bit for future use*/
+    IOM_UNDEF_24 =          1<<24,	                   /*Undef bit for future use*/
+    IOM_UNDEF_25 =          1<<25,	                   /*Undef bit for future use*/
+    IOM_UNDEF_26 =          1<<26,	                   /*Undef bit for future use*/
+    IOM_UNDEF_27 =          1<<27,	                   /*Undef bit for future use*/
+    IOM_UNDEF_28 =          1<<28,	                   /*Undef bit for future use*/
+    IOM_UNDEF_29 =          1<<29,	                   /*Undef bit for future use*/
+    IOM_UNDEF_30 =          1<<30,	                   /*Undef bit for future use*/
+    IOM_UNDEF_LAST =        1<<31	                   /*Undef bit for future use*/
+
+};
+
+#endif
+
 struct buffer_head;
 typedef int (get_block_t)(struct inode *inode, sector_t iblock,
 			struct buffer_head *bh_result, int create);
@@ -271,7 +350,7 @@ struct iattr {
  */
 #define FILESYSTEM_MAX_STACK_DEPTH 2
 
-/** 
+/**
  * enum positive_aop_returns - aop return codes with specific semantics
  *
  * @AOP_WRITEPAGE_ACTIVATE: Informs the caller that page writeback has
@@ -281,7 +360,7 @@ struct iattr {
  * 			    be a candidate for writeback again in the near
  * 			    future.  Other callers must be careful to unlock
  * 			    the page if they get this return.  Returned by
- * 			    writepage(); 
+ * 			    writepage();
  *
  * @AOP_TRUNCATED_PAGE: The AOP method that was handed a locked page has
  *  			unlocked it and the page might have been truncated.
@@ -475,7 +554,6 @@ struct block_device {
 	int			bd_invalidated;
 	struct gendisk *	bd_disk;
 	struct request_queue *  bd_queue;
-	struct backing_dev_info *bd_bdi;
 	struct list_head	bd_list;
 	/*
 	 * Private data.  You must have bd_claim'ed the block_device
@@ -600,7 +678,7 @@ is_uncached_acl(struct posix_acl *acl)
 /*
  * Keep mostly read-only and often accessed (especially for
  * the RCU path lookup and 'stat' data) fields at the beginning
- * of the 'struct inode'
+ * of the 'struct inode
  */
 struct inode {
 	umode_t			i_mode;
@@ -701,6 +779,16 @@ struct inode {
 
 #if IS_ENABLED(CONFIG_FS_ENCRYPTION)
 	struct fscrypt_info	*i_crypt_info;
+#endif
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+#define UNINIT_FILE_NAME  (char*)0xFFFFFFFFFFFFFFFF
+	struct mutex		i_count_mutex;
+	u64 i_write_count;
+	u64 i_read_count;
+	u64 i_write_times;
+	u64 i_read_times;
+	char i_fullnambuf[256];
+	char* i_filename;
 #endif
 
 	void			*i_private; /* fs or device private pointer */
@@ -939,8 +1027,8 @@ static inline struct file *get_file(struct file *f)
 
 #define	MAX_NON_LFS	((1UL<<31) - 1)
 
-/* Page cache limit. The filesystems should put that into their s_maxbytes 
-   limits, otherwise bad things can happen in VM. */ 
+/* Page cache limit. The filesystems should put that into their s_maxbytes
+   limits, otherwise bad things can happen in VM. */
 #if BITS_PER_LONG==32
 #define MAX_LFS_FILESIZE	((loff_t)ULONG_MAX << PAGE_SHIFT)
 #elif BITS_PER_LONG==64
@@ -2048,7 +2136,7 @@ int sync_inode_metadata(struct inode *inode, int wait);
 struct file_system_type {
 	const char *name;
 	int fs_flags;
-#define FS_REQUIRES_DEV		1 
+#define FS_REQUIRES_DEV		1
 #define FS_BINARY_MOUNTDATA	2
 #define FS_HAS_SUBTYPE		4
 #define FS_USERNS_MOUNT		8	/* Can be mounted by userns root */
@@ -2399,7 +2487,6 @@ extern struct kmem_cache *names_cachep;
 #ifdef CONFIG_BLOCK
 extern int register_blkdev(unsigned int, const char *);
 extern void unregister_blkdev(unsigned int, const char *);
-extern void bdev_unhash_inode(dev_t dev);
 extern struct block_device *bdget(dev_t);
 extern struct block_device *bdgrab(struct block_device *bdev);
 extern void bd_set_size(struct block_device *, loff_t size);
@@ -2735,7 +2822,7 @@ extern int kernel_read_file_from_fd(int, void **, loff_t *, loff_t,
 extern ssize_t kernel_write(struct file *, const char *, size_t, loff_t);
 extern ssize_t __kernel_write(struct file *, const char *, size_t, loff_t *);
 extern struct file * open_exec(const char *);
- 
+
 /* fs/dcache.c -- generic fs support functions */
 extern bool is_subdir(struct dentry *, struct dentry *);
 extern bool path_is_under(struct path *, struct path *);
@@ -3053,6 +3140,24 @@ extern int file_update_time(struct file *file);
 extern int generic_show_options(struct seq_file *m, struct dentry *root);
 extern void save_mount_options(struct super_block *sb, char *options);
 extern void replace_mount_options(struct super_block *sb, char *options);
+extern char *getfullpath(struct inode *inod,char* buffer,int len);
+extern int ftrace_print(char const *fmt, ...);
+extern char* get_bio_related_filename (struct bio *bio, char* filename_buf,int len, uint32_t *pinode);
+
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+extern void fsdbg_rw_info_to_fifo(struct inode *inod);
+extern void fsdbg_active_inodes_dump(void);
+extern int fsdbg_write_to_file(void);
+#endif
+
+#ifdef CONFIG_IO_MONITOR
+#define IOM_FIFO_SIZE  0x10000
+#define IOM_FIFO_RSV_SIZE  0x1000
+extern s64 iom_threshold;
+
+extern void iom_bio_start(struct bio *bio);
+extern void iom_bio_end(struct bio *bio);
+#endif
 
 static inline bool io_is_direct(struct file *filp)
 {

@@ -15,7 +15,7 @@
 #include <linux/of.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
-
+#include <linux/gpio.h>
 #include "dsi_pwr.h"
 
 /*
@@ -167,6 +167,13 @@ static int dsi_pwr_enable_vregs(struct dsi_regulator_info *regs, bool enable)
 
 			if (vreg->post_on_sleep)
 				msleep(vreg->post_on_sleep);
+
+			if(!strcmp(vreg->vreg_name, "vddio"))
+			{
+				rc = gpio_direction_output(80, 1);
+				gpio_set_value(80, 1);
+				mdelay(6);
+			}
 		}
 	} else {
 		for (i = (regs->count - 1); i >= 0; i--) {

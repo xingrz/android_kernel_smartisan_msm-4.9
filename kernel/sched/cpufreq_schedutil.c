@@ -24,7 +24,6 @@ unsigned long boosted_cpu_util(int cpu);
 #endif
 
 #define SUGOV_KTHREAD_PRIORITY	50
-
 struct sugov_tunables {
 	struct gov_attr_set attr_set;
 	unsigned int rate_limit_us;
@@ -161,8 +160,20 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 	struct cpufreq_policy *policy = sg_policy->policy;
 	unsigned int freq = arch_scale_freq_invariant() ?
 				policy->cpuinfo.max_freq : policy->cur;
-
-	freq = (freq + (freq >> 2)) * util / max;
+	switch (max) {
+		case 381:
+			freq = (((freq << 3) - freq) * util) >> 11;
+			break;
+		case 1024:
+			freq = ((freq + (freq >> 2)) * util) >> 10;
+			break;
+		case 967:
+			freq = (((freq << 3 ) + (freq << 1) + (freq >> 1)) * util) >> 13;
+			break;
+		default:
+			freq = (freq + (freq >> 2)) * util / max;
+			break;
+	}
 	trace_sugov_next_freq(policy->cpu, util, max, freq);
 
 	if (freq == sg_policy->cached_raw_freq && sg_policy->next_freq != UINT_MAX)
@@ -611,7 +622,6 @@ static struct governor_attr rate_limit_us = __ATTR_RW(rate_limit_us);
 static struct governor_attr hispeed_load = __ATTR_RW(hispeed_load);
 static struct governor_attr hispeed_freq = __ATTR_RW(hispeed_freq);
 static struct governor_attr pl = __ATTR_RW(pl);
-
 static struct attribute *sugov_attributes[] = {
 	&rate_limit_us.attr,
 	&hispeed_load.attr,

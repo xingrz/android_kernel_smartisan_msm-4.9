@@ -22,6 +22,11 @@ struct file;
 struct videomode;
 struct device_node;
 
+#define LCD_EVENT_ON   0xFF0
+#define LCD_EVENT_ON_END    0xFF1
+#define LCD_EVENT_OFF  0xFF2
+#define LCD_EVENT_OFF_END   0xFF3
+
 /* Definitions below are used in the parsed monitor specs */
 #define FB_DPMS_ACTIVE_OFF	1
 #define FB_DPMS_SUSPEND		2

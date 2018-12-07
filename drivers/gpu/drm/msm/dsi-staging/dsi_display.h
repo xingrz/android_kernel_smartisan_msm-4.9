@@ -132,9 +132,6 @@ struct dsi_display_clk_info {
  * @is_active:        Is display active.
  * @is_cont_splash_enabled:  Is continuous splash enabled
  * @display_lock:     Mutex for dsi_display interface.
- * @disp_te_gpio:     GPIO for panel TE interrupt.
- * @is_te_irq_enabled:bool to specify whether TE interrupt is enabled.
- * @esd_te_gate:      completion gate to signal TE interrupt.
  * @ctrl_count:       Number of DSI interfaces required by panel.
  * @ctrl:             Controller information for DSI display.
  * @panel:            Handle to DSI panel.
@@ -145,8 +142,6 @@ struct dsi_display_clk_info {
  *		      index into the ctrl[MAX_DSI_CTRLS_PER_DISPLAY] array.
  * @cmd_master_idx:   The master controller for sending DSI commands to panel.
  * @video_master_idx: The master controller for enabling video engine.
- * @cached_clk_rate:  The cached DSI clock rate set dynamically by sysfs.
- * @clkrate_change_pending: Flag indicating the pending DSI clock re-enabling.
  * @clock_info:       Clock sourcing for DSI display.
  * @config:           DSI host configuration information.
  * @lane_map:         Lane mapping between DSI host and Panel.
@@ -178,9 +173,6 @@ struct dsi_display {
 	bool is_active;
 	bool is_cont_splash_enabled;
 	struct mutex display_lock;
-	int disp_te_gpio;
-	bool is_te_irq_enabled;
-	struct completion esd_te_gate;
 
 	u32 ctrl_count;
 	struct dsi_display_ctrl ctrl[MAX_DSI_CTRLS_PER_DISPLAY];
@@ -195,10 +187,6 @@ struct dsi_display {
 	u32 clk_master_idx;
 	u32 cmd_master_idx;
 	u32 video_master_idx;
-
-	/* dynamic DSI clock info*/
-	u32  cached_clk_rate;
-	atomic_t clkrate_change_pending;
 
 	struct dsi_display_clk_info clock_info;
 	struct dsi_host_config config;

@@ -886,7 +886,7 @@ int sde_rsc_client_vote(struct sde_rsc_client *caller_client,
 	struct sde_rsc_priv *rsc;
 
 	if (!caller_client) {
-		pr_err("invalid client for ab/ib vote\n");
+	//	pr_err("invalid client for ab/ib vote\n");
 		return -EINVAL;
 	} else if (caller_client->rsc_index >= MAX_RSC_COUNT) {
 		pr_err("invalid rsc index\n");

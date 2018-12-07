@@ -42,13 +42,19 @@ static int fb_notifier_callback(struct notifier_block *self,
 {
 	struct backlight_device *bd;
 	struct fb_event *evdata = data;
-	int node = evdata->info->node;
+	int node;
 	int fb_blank = 0;
 
 	/* If we aren't interested in this event, skip it immediately ... */
 	if (event != FB_EVENT_BLANK && event != FB_EVENT_CONBLANK)
 		return 0;
 
+	if (evdata == NULL || evdata->info == NULL) {
+		pr_err("%s: invalid param\n", __func__);
+		return -EINVAL;
+	}
+
+	node = evdata->info->node;
 	bd = container_of(self, struct backlight_device, fb_notif);
 	mutex_lock(&bd->ops_lock);
 	if (bd->ops)

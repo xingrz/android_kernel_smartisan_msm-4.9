@@ -957,6 +957,11 @@ static int ext4_drop_inode(struct inode *inode)
 {
 	int drop = generic_drop_inode(inode);
 
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+	fsdbg_rw_info_to_fifo(inode);
+	fsdbg_write_to_file();
+#endif
+
 	trace_ext4_drop_inode(inode, drop);
 	return drop;
 }

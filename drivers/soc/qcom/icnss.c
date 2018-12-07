@@ -1159,9 +1159,8 @@ bool icnss_is_fw_down(void)
 {
 	if (!penv)
 		return false;
-
-	return test_bit(ICNSS_FW_DOWN, &penv->state) ||
-		test_bit(ICNSS_PD_RESTART, &penv->state);
+	else
+		return test_bit(ICNSS_FW_DOWN, &penv->state);
 }
 EXPORT_SYMBOL(icnss_is_fw_down);
 
@@ -3380,6 +3379,7 @@ int icnss_trigger_recovery(struct device *dev)
 		goto out;
 	}
 
+	WARN_ON(1);
 	icnss_pr_warn("Initiate PD restart at WLAN FW, state: 0x%lx\n",
 		      priv->state);
 

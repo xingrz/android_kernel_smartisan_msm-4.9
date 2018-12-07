@@ -22,6 +22,8 @@
 #include <linux/pagevec.h>
 #include <linux/uuid.h>
 #include <linux/file.h>
+#include <linux/kfifo.h>
+#include <linux/mutex.h>
 
 #include "f2fs.h"
 #include "node.h"
@@ -31,6 +33,7 @@
 #include "gc.h"
 #include "trace.h"
 #include <trace/events/f2fs.h>
+#include <trace/events/fsdbg.h>
 
 static int f2fs_vm_page_mkwrite(struct vm_area_struct *vma,
 						struct vm_fault *vmf)
@@ -2240,18 +2243,139 @@ long f2fs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return -ENOTTY;
 	}
 }
+static void fs_log_f2fs_rw(struct kiocb *iocb, loff_t pos, size_t length, ktime_t ts_enter, int rw)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+	char fullname_buf[512];
+	char rw_str[16];
+	char *fullname=NULL;
+	int duration;
+	ktime_t ts_exit, duration_ktime;
 
+	fullname=getfullpath(inode,fullname_buf,sizeof(fullname_buf));
+	ts_exit = ktime_get();
+	duration_ktime = ktime_sub(ts_exit, ts_enter);
+	duration = duration_ktime.tv64/1000;
+
+	if(rw)
+		strcpy(rw_str, "WRITE");
+	else
+		strcpy(rw_str, "READ");
+
+	if(fullname)
+	{
+		// not dump logd/* files
+		if(!strstr(fullname, "logd"))
+		{
+			//printk(KERN_DEBUG "%s(%d): %s, f2fs inode: %lu, name: %s, lenght: %lu, pos: %lld, duration: %d\n", current->comm, current->pid, rw_str, inode->i_ino, fullname, length, pos, duration);
+			trace_fsdbg_f2fs_rw(rw_str, inode->i_ino, fullname, length, pos, duration);
+		}
+	}
+	else
+	{
+		//printk(KERN_DEBUG "%s(%d): %s, f2fs inode: %lu, name: %s, lenght: %lu, pos: %lld, duration: %d\n", current->comm, current->pid, rw_str, inode->i_ino, "NULL", length, pos, duration);
+		trace_fsdbg_f2fs_rw(rw_str, inode->i_ino, "NULL", length, pos, duration);
+	}
+
+}
+
+#ifdef CONFIG_IO_MONITOR
+extern struct kfifo iom_log_fifo_fs;
+extern struct mutex iom_log_fifo_lock_fs;
+
+static void iom_f2fs_rw(struct kiocb *iocb, loff_t pos, size_t length, ktime_t ts_enter, int rw)
+{
+	struct inode *inode = file_inode(iocb->ki_filp);
+	char fullname_buf[512];
+	char line_buf[512];
+	char rw_str[16];
+	char *fullname=NULL;
+	int duration;
+	ktime_t ts_exit, duration_ktime;
+	int fifo_len, size, len;
+
+	// get process time
+	ts_exit = ktime_get();
+	duration_ktime = ktime_sub(ts_exit, ts_enter);
+	if(duration_ktime.tv64 < iom_threshold)
+		return;
+
+	// save log into fifo
+	fullname=getfullpath(inode,fullname_buf,sizeof(fullname_buf));
+	duration = duration_ktime.tv64/1000000;
+
+	if(rw)
+		strcpy(rw_str, "WRITE");
+	else
+		strcpy(rw_str, "READ");
+
+	ts_enter.tv64 /= 1000;
+	if(fullname)
+	{
+		snprintf(line_buf, sizeof(line_buf), "[%5llu.%06llu] %s(%d): F2FS, %s, pos=%llu, len=%zd, duration=%d, ino=%lu, name=%s\n",
+			ts_enter.tv64/1000000, ts_enter.tv64%1000000, current->comm, current->pid, rw_str, pos, length, duration, inode->i_ino, fullname);
+	}
+	else
+	{
+		snprintf(line_buf, sizeof(line_buf), "[%5llu.%06llu] %s(%d): F2FS, %s, pos=%llu, len=%zd, duration=%d, ino=%lu, name=%s\n",
+			ts_enter.tv64/1000000, ts_enter.tv64%1000000, current->comm, current->pid, rw_str, pos, length, duration, inode->i_ino, "NULL");
+	}
+	mutex_lock(&iom_log_fifo_lock_fs);
+	kfifo_in(&iom_log_fifo_fs, line_buf, strlen(line_buf));
+	mutex_unlock(&iom_log_fifo_lock_fs);
+	// If fifo full discard old log
+	fifo_len = kfifo_len(&iom_log_fifo_fs);
+	if(fifo_len > IOM_FIFO_SIZE - IOM_FIFO_RSV_SIZE)
+	{
+		len = IOM_FIFO_RSV_SIZE;
+		while(len > 0)
+		{
+			mutex_lock(&iom_log_fifo_lock_fs);
+			size = kfifo_out(&iom_log_fifo_fs, line_buf, sizeof(line_buf));
+			mutex_unlock(&iom_log_fifo_lock_fs);
+			if(size < 0)
+			{
+				break;
+			}
+			else
+			{
+				len -= sizeof(line_buf);
+			}
+		}
+	}
+
+
+}
+
+#endif
 static ssize_t f2fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *file = iocb->ki_filp;
 	struct inode *inode = file_inode(file);
 	struct blk_plug plug;
 	ssize_t ret;
+	ktime_t ts_enter={0};
+	loff_t pos=0;
+	size_t length=0;
 
 	if (f2fs_encrypted_inode(inode) &&
 				!fscrypt_has_encryption_key(inode) &&
 				fscrypt_get_encryption_info(inode))
 		return -EACCES;
+
+	if (unlikely(fs_dump&FS_LOG_F2FS_RW)) {
+		ts_enter = ktime_get();
+		pos = iocb->ki_pos;
+		length = iov_iter_count(from);
+	}
+
+#ifdef CONFIG_IO_MONITOR
+	if(iom_mask&IOM_F2FS_RW){
+		ts_enter = ktime_get();
+		pos = iocb->ki_pos;
+		length = iov_iter_count(from);
+	}
+#endif
 
 	inode_lock(inode);
 	ret = generic_write_checks(iocb, from);
@@ -2267,6 +2391,50 @@ static ssize_t f2fs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 	if (ret > 0)
 		ret = generic_write_sync(iocb, ret);
+
+#ifdef CONFIG_IO_MONITOR
+	if(iom_mask&IOM_F2FS_RW){
+		iom_f2fs_rw(iocb, pos, length, ts_enter, 1);
+	}
+#endif
+
+	if (unlikely(fs_dump&FS_LOG_F2FS_RW)) {
+		fs_log_f2fs_rw(iocb, pos, length, ts_enter, 1);
+	}
+	return ret;
+}
+
+static ssize_t f2fs_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
+{
+	ssize_t ret;
+	ktime_t ts_enter={0};
+	loff_t pos=0;
+	size_t length=0;
+
+	if (unlikely(fs_dump&FS_LOG_F2FS_RW)) {
+		ts_enter = ktime_get();
+		pos = iocb->ki_pos;
+		length = iov_iter_count(iter);
+	}
+#ifdef CONFIG_IO_MONITOR
+	if(iom_mask&IOM_F2FS_RW){
+		ts_enter = ktime_get();
+		pos = iocb->ki_pos;
+		length = iov_iter_count(iter);
+	}
+#endif
+
+	ret = generic_file_read_iter(iocb, iter);
+
+#ifdef CONFIG_IO_MONITOR
+	if(iom_mask&IOM_F2FS_RW){
+		iom_f2fs_rw(iocb, pos, length, ts_enter, 0);
+	}
+#endif
+	if (unlikely(fs_dump&FS_LOG_F2FS_RW)) {
+		fs_log_f2fs_rw(iocb, pos, length, ts_enter, 0);
+	}
+
 	return ret;
 }
 
@@ -2307,7 +2475,7 @@ long f2fs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 const struct file_operations f2fs_file_operations = {
 	.llseek		= f2fs_llseek,
-	.read_iter	= generic_file_read_iter,
+	.read_iter	= f2fs_file_read_iter,
 	.write_iter	= f2fs_file_write_iter,
 	.open		= f2fs_file_open,
 	.release	= f2fs_release_file,

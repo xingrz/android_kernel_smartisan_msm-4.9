@@ -65,7 +65,7 @@
 #define LINESTATE_DP			BIT(0)
 #define LINESTATE_DM			BIT(1)
 
-#define BIAS_CTRL_2_OVERRIDE_VAL	0x28
+#define BIAS_CTRL_2_OVERRIDE_VAL	0x26
 
 #define SQ_CTRL1_CHIRP_DISABLE		0x20
 #define SQ_CTRL2_CHIRP_DISABLE		0x80
@@ -73,6 +73,9 @@
 /* PERIPH_SS_PHY_REFGEN_NORTH_BG_CTRL register bits */
 #define BANDGAP_BYPASS			BIT(0)
 
+unsigned int ssphy_pcs_txmgn_bias2;
+module_param(ssphy_pcs_txmgn_bias2, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(ssphy_pcs_txmgn_bias2, "SSUSB QMP PHY TXMGN V0");
 enum qusb_phy_reg {
 	PORT_TUNE1,
 	PLL_COMMON_STATUS_ONE,
@@ -478,6 +481,7 @@ static int qusb_phy_init(struct usb_phy *phy)
 
 		pr_debug("%s(): Programming TUNE1 parameter as:%x\n", __func__,
 				qphy->tune_val);
+		qphy->tune_val = 0x43;
 		writel_relaxed(qphy->tune_val,
 				qphy->base + qphy->phy_reg[PORT_TUNE1]);
 	}
@@ -495,6 +499,10 @@ static int qusb_phy_init(struct usb_phy *phy)
 			writel_relaxed(BIAS_CTRL_2_OVERRIDE_VAL,
 				qphy->base + qphy->phy_reg[BIAS_CTRL_2]);
 
+	if (ssphy_pcs_txmgn_bias2)
+			writel_relaxed(ssphy_pcs_txmgn_bias2,
+				qphy->base + qphy->phy_reg[BIAS_CTRL_2]);
+
 	/* ensure above writes are completed before re-enabling PHY */
 	wmb();
 
@@ -508,6 +516,11 @@ static int qusb_phy_init(struct usb_phy *phy)
 
 	/* Require to get phy pll lock successfully */
 	usleep_range(150, 160);
+
+	if (ssphy_pcs_txmgn_bias2) {
+		dev_info(phy->dev, "bias2:%02x tune1:%02x\n", readb_relaxed(qphy->base + qphy->phy_reg[BIAS_CTRL_2]),
+							readb_relaxed(qphy->base + qphy->phy_reg[PORT_TUNE1]));
+	}
 
 	reg = readb_relaxed(qphy->base + qphy->phy_reg[PLL_COMMON_STATUS_ONE]);
 	dev_dbg(phy->dev, "QUSB2PHY_PLL_COMMON_STATUS_ONE:%x\n", reg);
@@ -766,7 +779,10 @@ static int qusb_phy_dpdm_regulator_enable(struct regulator_dev *rdev)
 			return ret;
 		}
 		qphy->dpdm_enable = true;
-		qusb_phy_reset(qphy);
+		if (1 == qphy->power_enabled_ref)
+		{
+			qusb_phy_reset(qphy);
+		}
 	}
 
 	return ret;

@@ -34,4 +34,11 @@ config DIAGFWD_BRIDGE_CODE
 	  become available, this bridge driver enables DIAG traffic over MHI
 	  and SMUX.
 
+config DIAG_CERTIFY
+	bool "Enable DIAG certify function"
+        depends on DIAG_CHAR
+	default n
+	help
+	 This feature helps segregate code required for DIAG certify.
+
 endmenu

@@ -1117,7 +1117,6 @@ static DEVICE_ATTR(sustainable_power, S_IWUSR | S_IRUGO, sustainable_power_show,
 			return -EINVAL;					\
 									\
 		tz->tzp->name = value;					\
-									\
 		return count;						\
 	}								\
 	static DEVICE_ATTR(name, S_IWUSR | S_IRUGO, name##_show, name##_store)

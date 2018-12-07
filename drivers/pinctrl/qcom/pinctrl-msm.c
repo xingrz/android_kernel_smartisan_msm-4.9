@@ -500,8 +500,14 @@ static void msm_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 	unsigned i;
 
 	for (i = 0; i < chip->ngpio; i++, gpio++) {
-		msm_gpio_dbg_show_one(s, NULL, chip, i, gpio);
-		seq_puts(s, "\n");
+		/*
+		 * msm_gpio_dbg_show_one(s, NULL, chip, i, gpio);
+		 * seq_puts(s, "\n");
+		 */
+		/*gpio0-3,gpio81-84 by used in the TZ side*/
+		if ( i!=0 && i!=1 &&i!=2 &&i!=3 &&i!=81 &&i!=82 && i!=83 &&i!=84)
+		  msm_gpio_dbg_show_one(s, NULL, chip, i, gpio);
+		  seq_puts(s, "\n");
 	}
 }
 
@@ -1231,6 +1237,7 @@ int msm_pinctrl_probe(struct platform_device *pdev,
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	pctrl->regs = devm_ioremap_resource(&pdev->dev, res);
+
 	if (IS_ERR(pctrl->regs))
 		return PTR_ERR(pctrl->regs);
 
