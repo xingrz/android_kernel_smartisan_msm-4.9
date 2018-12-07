@@ -28,6 +28,7 @@
 #include "smb-lib.h"
 #include "storm-watch.h"
 #include <linux/pmic-voter.h>
+#include <linux/msm_drm_notify.h>
 
 #define SMB2_DEFAULT_WPWR_UW	8000000
 
@@ -297,6 +298,25 @@ static int smb2_parse_dt(struct smb2 *chip)
 			return rc;
 		}
 	}
+
+	if (of_find_property(node, "qcom,thermal-mitigation-panel-on", &byte_len)) {
+			 chg->thermal_mitigation_panel_on = devm_kzalloc(chg->dev, byte_len,
+					 GFP_KERNEL);
+
+			 if (chg->thermal_mitigation_panel_on == NULL)
+					 return -ENOMEM;
+
+			 chg->thermal_levels_panel_on = byte_len / sizeof(u32);
+			 rc = of_property_read_u32_array(node,
+							 "qcom,thermal-mitigation-panel-on",
+							 chg->thermal_mitigation_panel_on,
+							 chg->thermal_levels_panel_on);
+			 if (rc < 0) {
+					 dev_err(chg->dev,
+							 "Couldn't read threm therm panel on limits rc = %d\n", rc);
+					 return rc;
+			 }
+	 }
 
 	of_property_read_u32(node, "qcom,float-option", &chip->dt.float_option);
 	if (chip->dt.float_option < 0 || chip->dt.float_option > 4) {
@@ -826,6 +846,8 @@ static enum power_supply_property smb2_dc_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
 	POWER_SUPPLY_PROP_CURRENT_MAX,
 	POWER_SUPPLY_PROP_REAL_TYPE,
+	POWER_SUPPLY_PROP_VOLTAGE_NOW,
+	POWER_SUPPLY_PROP_CURRENT_NOW
 };
 
 static int smb2_dc_get_prop(struct power_supply *psy,
@@ -851,6 +873,12 @@ static int smb2_dc_get_prop(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_REAL_TYPE:
 		val->intval = POWER_SUPPLY_TYPE_WIPOWER;
+		break;
+	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+		rc = smblib_get_prop_dc_voltage_now(chg, val);
+		break;
+	case POWER_SUPPLY_PROP_CURRENT_NOW:
+		rc = smblib_get_prop_dc_current_now(chg, val);
 		break;
 	default:
 		return -EINVAL;
@@ -1528,6 +1556,10 @@ static int smb2_init_hw(struct smb2 *chip)
 		chg->param.freq_boost.max_u = chip->dt.max_freq_khz;
 	}
 
+	/*limit qc2.0 volt-adjust to 9v and qc3.0 to 6.6v*/
+	smblib_masked_write(chg, HVDCP_PULSE_COUNT_MAX_REG, PULSE_COUNT_QC2P0_12V | PULSE_COUNT_QC2P0_9V, PULSE_COUNT_QC2P0_9V);
+	smblib_masked_write(chg, HVDCP_PULSE_COUNT_MAX_REG, PULSE_COUNT_QC3P0_MASK, 0x8);
+
 	/* set a slower soft start setting for OTG */
 	rc = smblib_masked_write(chg, DC_ENG_SSUPPLY_CFG2_REG,
 				ENG_SSUPPLY_IVREF_OTG_SS_MASK, OTG_SS_SLOW);
@@ -2067,7 +2099,7 @@ static struct smb_irq_info smb2_irqs[] = {
 	},
 	[AICL_FAIL_IRQ] = {
 		.name		= "aicl-fail",
-		.handler	= smblib_handle_debug,
+		.handler	= smblib_handle_aicl_fail,
 	},
 	[AICL_DONE_IRQ] = {
 		.name		= "aicl-done",
@@ -2269,6 +2301,35 @@ static void smb2_create_debugfs(struct smb2 *chip)
 
 #endif
 
+static int dsi_panel_notifier_cb(struct notifier_block *self,
+                unsigned long event, void *data)
+{
+        struct smb_charger *chg = container_of(self, struct smb_charger,
+                        dsi_panel_notifier);
+	struct msm_drm_notifier *evdata = data;
+	int blank;
+
+	if (!evdata || (evdata->id != 0))
+		return 0;
+
+	if (chg && (event == MSM_DRM_EVENT_BLANK)) {
+		blank = *(int *)(evdata->data);
+
+		if (blank == MSM_DRM_BLANK_UNBLANK) {
+			chg->panel_on = true;
+			schedule_work(&chg->panel_status_work);
+		} else if (blank == MSM_DRM_BLANK_POWERDOWN) {
+			chg->panel_on = false;
+			schedule_work(&chg->panel_status_work);
+		} else {
+			pr_err("%s: receives wrong data BLANK:%d\n",
+				__func__, blank);
+		}
+	}
+
+        return 0;
+}
+
 static int smb2_probe(struct platform_device *pdev)
 {
 	struct smb2 *chip;
@@ -2436,6 +2497,13 @@ static int smb2_probe(struct platform_device *pdev)
 	}
 	batt_charge_type = val.intval;
 
+	chg->dsi_panel_notifier.notifier_call = dsi_panel_notifier_cb;
+	rc = msm_drm_register_client(&chg->dsi_panel_notifier);
+	if (rc < 0) {
+		pr_err("Failed to register dsi panel notifier client rc=%d\n",rc);
+		goto cleanup;
+	}
+
 	device_init_wakeup(chg->dev, true);
 
 	pr_info("QPNP SMB2 probed successfully usb:present=%d type=%d batt:present = %d health = %d charge = %d\n",
@@ -2477,6 +2545,8 @@ static int smb2_remove(struct platform_device *pdev)
 	regulator_unregister(chg->vconn_vreg->rdev);
 	regulator_unregister(chg->vbus_vreg->rdev);
 
+	msm_drm_unregister_client(&chg->dsi_panel_notifier);
+
 	platform_set_drvdata(pdev, NULL);
 	return 0;
 }
@@ -2501,6 +2571,7 @@ static void smb2_shutdown(struct platform_device *pdev)
 	/* force enable APSD */
 	smblib_masked_write(chg, USBIN_OPTIONS_1_CFG_REG,
 				 AUTO_SRC_DETECT_BIT, AUTO_SRC_DETECT_BIT);
+	msm_drm_unregister_client(&chg->dsi_panel_notifier);
 }
 
 static const struct of_device_id match_table[] = {

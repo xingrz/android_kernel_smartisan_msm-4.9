@@ -221,6 +221,12 @@ config AXP288_CHARGER
 	  Say yes here to have support X-Power AXP288 power management IC (PMIC)
 	  integrated charger.
 
+config P9220_CHARGER
+	tristate "IDT P9220 Charger"
+	depends on I2C
+	help
+	  Say yes here to have support charger P9220 wireless charger.
+
 config AXP288_FUEL_GAUGE
 	tristate "X-Powers AXP288 Fuel Gauge"
 	depends on MFD_AXP20X && IIO

@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -38,6 +38,15 @@ static u32 dither_matrix[DITHER_MATRIX_SZ] = {
 	15, 7, 13, 5, 3, 11, 1, 9, 12, 4, 14, 6, 0, 8, 2, 10
 };
 
+static u32 gamma_luminance[] = {
+	0,    16,    32,   76,   176,  192,  226,  286,
+	382,  432,  537,  609,  679,  775,  895,  1015,
+	1121,  1257,  1385, 1486, 1662, 1802, 1969, 2153,
+	2280, 2477, 2709, 2869, 3196, 3372, 3604, 3856,
+	4095
+};
+
+
 static const struct drm_prop_enum_list e_topology_name[] = {
 	{SDE_RM_TOPOLOGY_NONE,	"sde_none"},
 	{SDE_RM_TOPOLOGY_SINGLEPIPE,	"sde_singlepipe"},
@@ -67,6 +76,7 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 	struct dsi_display *display;
 	struct sde_connector *c_conn;
 	int bl_lvl;
+	int temp;
 	struct drm_event event;
 
 	brightness = bd->props.brightness;
@@ -84,9 +94,20 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 	/* map UI brightness into driver backlight level with rounding */
 	bl_lvl = mult_frac(brightness, display->panel->bl_config.bl_max_level,
 			display->panel->bl_config.brightness_max_level);
+	if((brightness > 0) && (brightness < 10))
+		brightness = 10;
 
 	if (!bl_lvl && brightness)
 		bl_lvl = 1;
+
+	temp = brightness/8;
+	if (brightness < 255)
+	{
+		bl_lvl = gamma_luminance[temp] + (gamma_luminance[temp+1] - gamma_luminance[temp]) * (brightness%8)/8;
+	}
+	else
+		bl_lvl = 4095;
+	/* printk("backlight curve: after bl_lvl = %d value = %d\n",bl_lvl,brightness); */
 
 	if (c_conn->ops.set_backlight) {
 		event.type = DRM_EVENT_SYS_BACKLIGHT;
@@ -471,8 +492,11 @@ static int _sde_connector_update_power_locked(struct sde_connector *c_conn)
 	}
 	c_conn->last_panel_power_mode = mode;
 
-	if (mode != SDE_MODE_DPMS_ON)
+	if (mode != SDE_MODE_DPMS_ON){
+		mutex_unlock(&c_conn->lock);
 		sde_connector_schedule_status_work(connector, false);
+		mutex_lock(&c_conn->lock);
+	}
 
 	return rc;
 }
@@ -1725,6 +1749,7 @@ status_dead:
 	event.length = sizeof(bool);
 	msm_mode_object_event_notify(&conn->base.base,
 		conn->base.dev, &event, (u8 *)&panel_dead);
+	sde_encoder_display_failure_notification(conn->encoder);
 }
 
 static const struct drm_connector_helper_funcs sde_connector_helper_ops = {

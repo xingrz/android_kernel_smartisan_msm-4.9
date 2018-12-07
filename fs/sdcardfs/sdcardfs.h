@@ -176,6 +176,11 @@ extern struct inode *sdcardfs_iget(struct super_block *sb,
 extern int sdcardfs_interpose(struct dentry *dentry, struct super_block *sb,
 			    struct path *lower_path, userid_t id);
 
+#ifdef CONFIG_SDCARD_FS_XATTR
+extern ssize_t sdcardfs_listxattr(struct dentry *dentry, char *list, size_t size);
+extern const struct xattr_handler *sdcardfs_xattr_handlers[];
+
+#endif // CONFIG_SDCARD_FS_XATTR
 /* file private data */
 struct sdcardfs_file_info {
 	struct file *lower_file;

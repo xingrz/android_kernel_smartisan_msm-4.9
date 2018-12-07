@@ -23,6 +23,8 @@
 #include "gc.h"
 #include <trace/events/f2fs.h>
 
+struct wakeup_source f2fs_gc_wakesrc;
+
 static int gc_thread_func(void *data)
 {
 	struct f2fs_sb_info *sbi = data;
@@ -44,6 +46,12 @@ static int gc_thread_func(void *data)
 
 		if (sbi->sb->s_writers.frozen >= SB_FREEZE_WRITE) {
 			increase_sleep_time(gc_th, &wait_ms);
+			continue;
+		}
+
+		if(get_suspend_state()){
+			printk("%s continue\n", __func__);
+			//crease_sleep_time(gc_th, &wait_ms);
 			continue;
 		}
 
@@ -81,9 +89,11 @@ static int gc_thread_func(void *data)
 
 		stat_inc_bggc_count(sbi);
 
+		__pm_stay_awake(&f2fs_gc_wakesrc);
 		/* if return value is not zero, no victim was selected */
 		if (f2fs_gc(sbi, test_opt(sbi, FORCE_FG_GC)))
 			wait_ms = gc_th->no_gc_sleep_time;
+		__pm_relax(&f2fs_gc_wakesrc);
 
 		trace_f2fs_background_gc(sbi->sb, wait_ms,
 				prefree_segments(sbi), free_segments(sbi));
@@ -122,6 +132,8 @@ int start_gc_thread(struct f2fs_sb_info *sbi)
 		kfree(gc_th);
 		sbi->gc_thread = NULL;
 	}
+
+	wakeup_source_init(&f2fs_gc_wakesrc, "f2fs-gc_wakesrc");
 out:
 	return err;
 }
@@ -131,6 +143,7 @@ void stop_gc_thread(struct f2fs_sb_info *sbi)
 	struct f2fs_gc_kthread *gc_th = sbi->gc_thread;
 	if (!gc_th)
 		return;
+	wakeup_source_trash(&f2fs_gc_wakesrc);
 	kthread_stop(gc_th->f2fs_gc_task);
 	kfree(gc_th);
 	sbi->gc_thread = NULL;

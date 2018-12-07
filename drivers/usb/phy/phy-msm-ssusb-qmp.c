@@ -139,6 +139,12 @@ struct msm_ssphy_qmp {
 	int			reg_offset_cnt;
 };
 
+unsigned int ssphy_pcs_txmgn_v0;
+module_param(ssphy_pcs_txmgn_v0, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(ssphy_pcs_txmgn_v0, "SSUSB QMP PHY TXMGN V0");
+unsigned int ssphy_txdeemph_m3p5db_v0;
+module_param(ssphy_txdeemph_m3p5db_v0, uint, S_IRUGO | S_IWUSR);
+MODULE_PARM_DESC(ssphy_txdeemph_m3p5db_v0, "SSUSB QMP PHY TXDEEMPH M3P5DB V0");
 static const struct of_device_id msm_usb_id_table[] = {
 	{
 		.compatible = "qcom,usb-ssphy-qmp",
@@ -458,6 +464,18 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 		return ret;
 	}
 
+	if (ssphy_pcs_txmgn_v0) {
+		pr_err("%s(): (modparam) ssphy_pcs_txmgn_v0 set val:0x%02x\n",
+				__func__, ssphy_pcs_txmgn_v0);
+		writel_relaxed(ssphy_pcs_txmgn_v0,
+				phy->base + 0x1c0c);
+	}
+	if (ssphy_txdeemph_m3p5db_v0) {
+		pr_info("%s(): (modparam) ssphy_txdeemph_m3p5db_v0 set val:0x%02x\n",
+				__func__, ssphy_txdeemph_m3p5db_v0);
+		writel_relaxed(ssphy_txdeemph_m3p5db_v0,
+				phy->base + 0x1c0c+4*7);
+	}
 	/* perform software reset of PHY common logic */
 	if (phy->phy.type == USB_PHY_TYPE_USB3_AND_DP)
 		writel_relaxed(0x00,
@@ -470,6 +488,12 @@ static int msm_ssphy_qmp_init(struct usb_phy *uphy)
 
 	/* Make sure above write completed to bring PHY out of reset */
 	mb();
+	if (ssphy_pcs_txmgn_v0)
+		pr_info("%s():ssphy_pcs_txmgn_v0 register val:0x%02x\n",
+				__func__, readb_relaxed(phy->base + 0x1c0c));
+	if (ssphy_txdeemph_m3p5db_v0)
+		pr_info("%s():ssphy_txdeemph_m3p5db_v0 register val:0x%02x\n",
+				__func__,  readb_relaxed( phy->base + 0x1c0c+4*7));
 
 	/* Wait for PHY initialization to be done */
 	do {

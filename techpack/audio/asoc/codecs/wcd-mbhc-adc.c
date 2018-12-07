@@ -9,6 +9,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+#define DEBUG
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -30,7 +31,7 @@
 #include "wcd-mbhc-adc.h"
 #include "wcd-mbhc-v2.h"
 
-#define WCD_MBHC_ADC_HS_THRESHOLD_MV    1700
+#define WCD_MBHC_ADC_HS_THRESHOLD_MV    2600
 #define WCD_MBHC_ADC_HPH_THRESHOLD_MV   75
 #define WCD_MBHC_ADC_MICBIAS_MV         1800
 #define WCD_MBHC_FAKE_INS_RETRY         4
@@ -101,7 +102,7 @@ static int wcd_measure_adc_continuous(struct wcd_mbhc *mbhc)
 	/* Get voltage from ADC result */
 	output_mv = wcd_get_voltage_from_adc(adc_result,
 					     wcd_mbhc_get_micbias(mbhc));
-	pr_debug("%s: adc_result: 0x%x, output_mv: %d\n",
+	pr_debug("%s: adc_result: 0x%x, output_mv (Vmic): %d\n",
 		 __func__, adc_result, output_mv);
 
 	return output_mv;
@@ -117,7 +118,7 @@ static int wcd_measure_adc_once(struct wcd_mbhc *mbhc, int mux_ctl)
 	int output_mv = 0;
 	u8 adc_en = 0;
 
-	pr_debug("%s: enter\n", __func__);
+	pr_debug("%s: enter, mux: %d\n", __func__, mux_ctl);
 
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_ADC_MODE, 0);
 	/* Read ADC Enable bit to restore after adc measurement */
@@ -1062,7 +1063,8 @@ static irqreturn_t wcd_mbhc_adc_hs_ins_irq(int irq, void *data)
 		WCD_MBHC_RSC_UNLOCK(mbhc);
 		return IRQ_HANDLED;
 	}
-
+        /*allow sometime schedule hs detect*/
+	msleep(150);
 	pr_debug("%s: Disable electrical headset insertion interrupt\n",
 		 __func__);
 	wcd_mbhc_hs_elec_irq(mbhc, WCD_MBHC_ELEC_HS_INS, false);

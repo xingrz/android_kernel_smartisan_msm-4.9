@@ -499,12 +499,15 @@ static ssize_t wake_lock_show(struct kobject *kobj,
 {
 	return pm_show_wakelocks(buf, true);
 }
+extern void log_last_wake_lock(const char *);
 
 static ssize_t wake_lock_store(struct kobject *kobj,
 			       struct kobj_attribute *attr,
 			       const char *buf, size_t n)
 {
-	int error = pm_wake_lock(buf);
+	int error;
+	log_last_wake_lock(buf);
+	error= pm_wake_lock(buf);
 	return error ? error : n;
 }
 

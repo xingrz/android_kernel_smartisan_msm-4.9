@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/completion.h>
 #include <linux/delay.h>
+#include "../../../../../kernel/power/power.h"
 
 #include "dp_ctrl.h"
 
@@ -134,6 +135,8 @@ static void dp_ctrl_push_idle(struct dp_ctrl *dp_ctrl)
 	if (!wait_for_completion_timeout(&ctrl->idle_comp,
 			idle_pattern_completion_timeout_ms))
 		pr_warn("PUSH_IDLE pattern timedout\n");
+
+	ctrl->link->link_training = false;
 
 	pr_debug("mainlink off done\n");
 }
@@ -1040,8 +1043,12 @@ static int dp_ctrl_setup_main_link(struct dp_ctrl_private *ctrl, bool train)
 	ctrl->catalog->reset(ctrl->catalog);
 
 	ret = dp_ctrl_link_train(ctrl);
-	if (ret)
+	if (ret) {
+		ctrl->link->link_training = false;
 		goto end;
+	}
+
+	ctrl->link->link_training = true;
 
 send_video:
 	/*
@@ -1396,6 +1403,7 @@ static int dp_ctrl_on(struct dp_ctrl *dp_ctrl)
 	if (ctrl->link->sink_request & DP_TEST_LINK_PHY_TEST_PATTERN)
 		dp_ctrl_send_phy_test_pattern(ctrl);
 
+	pm_wake_lock("dp");
 	pr_debug("End-\n");
 
 end:
@@ -1411,6 +1419,7 @@ static void dp_ctrl_off(struct dp_ctrl *dp_ctrl)
 
 	ctrl = container_of(dp_ctrl, struct dp_ctrl_private, dp_ctrl);
 
+	pm_wake_unlock("dp");
 	ctrl->catalog->mainlink_ctrl(ctrl->catalog, false);
 	ctrl->catalog->reset(ctrl->catalog);
 

@@ -3193,6 +3193,7 @@ static void dwc3_gadget_conndone_interrupt(struct dwc3 *dwc)
 	reg = dwc3_readl(dwc->regs, DWC3_DSTS);
 	speed = reg & DWC3_DSTS_CONNECTSPD;
 	dwc->speed = speed;
+	dev_info(dwc->dev, " %s usb speed=%d!\n",__func__,speed);
 
 	dwc3_update_ram_clk_sel(dwc, speed);
 

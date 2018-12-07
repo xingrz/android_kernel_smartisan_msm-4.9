@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,7 +18,7 @@
 #include <linux/gpio.h>
 #include <linux/of_gpio.h>
 #include <video/mipi_display.h>
-
+#include <linux/miscdevice.h>
 #include "dsi_panel.h"
 #include "dsi_ctrl_hw.h"
 
@@ -97,6 +97,13 @@ static char dsi_dsc_rc_range_max_qp_1_1_scr1[][15] = {
  */
 static char dsi_dsc_rc_range_bpg_offset[] = {2, 0, 0, -2, -4, -6, -8, -8,
 		-8, -10, -10, -12, -12, -12, -12};
+
+static struct dsi_panel * set_panel;
+u32 is_eye_care_mode = 0;
+//the switch symbol of color temperature
+u32 is_color_mode = 0;
+int faceid_enable = 0;
+u32 set_color_enable[2];
 
 int dsi_dsc_create_pps_buf_cmd(struct msm_display_dsc_info *dsc, char *buf,
 				int pps_id)
@@ -400,11 +407,36 @@ static int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable)
 	return rc;
 }
 
+int dsi_panel_trigger_esd_attack(struct dsi_panel *panel)
+{
+	struct dsi_panel_reset_config *r_config;
+
+	if (!panel) {
+		pr_err("Invalid panel param\n");
+		return -EINVAL;
+	}
+
+	r_config = &panel->reset_config;
+	if (!r_config) {
+		pr_err("Invalid panel reset configuration\n");
+		return -EINVAL;
+	}
+
+	if (gpio_is_valid(r_config->reset_gpio)) {
+		gpio_set_value(r_config->reset_gpio, 0);
+		pr_info("GPIO pulled low to simulate ESD\n");
+		return 0;
+	}
+	pr_err("failed to pull down gpio\n");
+	return -EINVAL;
+}
+extern int goodix_lcd_state_chg_callback(int lcd_on);
 
 static int dsi_panel_power_on(struct dsi_panel *panel)
 {
 	int rc = 0;
 
+	printk("%s:testtp dsi_panel_power_on\n", __func__);
 	rc = dsi_pwr_enable_regulator(&panel->power_info, true);
 	if (rc) {
 		pr_err("[%s] failed to enable vregs, rc=%d\n", panel->name, rc);
@@ -423,6 +455,7 @@ static int dsi_panel_power_on(struct dsi_panel *panel)
 		goto error_disable_gpio;
 	}
 
+	goodix_lcd_state_chg_callback(1);
 	goto exit;
 
 error_disable_gpio:
@@ -445,6 +478,10 @@ static int dsi_panel_power_off(struct dsi_panel *panel)
 {
 	int rc = 0;
 
+	printk("%s:testtp dsi_panel_power_off\n", __func__);
+	mutex_lock(&panel->transfer_mutex);
+	goodix_lcd_state_chg_callback(0);
+
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
 		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
 
@@ -459,15 +496,22 @@ static int dsi_panel_power_off(struct dsi_panel *panel)
 		pr_err("[%s] failed set pinctrl state, rc=%d\n", panel->name,
 		       rc);
 	}
-
+	mdelay(10);
+	rc = gpio_direction_output(80, 0);
+	gpio_set_value(80, 0);
 	rc = dsi_pwr_enable_regulator(&panel->power_info, false);
 	if (rc)
 		pr_err("[%s] failed to enable vregs, rc=%d\n", panel->name, rc);
-
+	mutex_unlock(&panel->transfer_mutex);
 	return rc;
 }
+/*the cool_cmd <-> cool color temperature's 20 levels*/
+static struct dsi_panel_cmd_set cool_cmd[TOTAL_LEVEL];
+/*the cool_cmd <-> warm color temperature's 20 levels*/
+static struct dsi_panel_cmd_set warm_cmd[TOTAL_LEVEL];
+
 static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
-				enum dsi_cmd_set_type type)
+				int type, int color_flag)
 {
 	int rc = 0, i = 0;
 	ssize_t len;
@@ -475,16 +519,32 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 	u32 count;
 	enum dsi_cmd_set_state state;
 	struct dsi_display_mode *mode;
-	const struct mipi_dsi_host_ops *ops = panel->host->ops;
 
-	if (!panel || !panel->cur_mode)
+	if (!panel || !panel->cur_mode || (panel->panel_power_state == 0 &&
+				!(type < DSI_CMD_SET_PRE_RES_SWITCH ||
+					type == DSI_CMD_SET_NOLP)))	// skip intial and power-off code
 		return -EINVAL;
-
+	mutex_lock(&panel->transfer_mutex);
 	mode = panel->cur_mode;
-
-	cmds = mode->priv_info->cmd_sets[type].cmds;
-	count = mode->priv_info->cmd_sets[type].count;
-	state = mode->priv_info->cmd_sets[type].state;
+	if(type < DSI_CMD_SET_MAX){
+		cmds = mode->priv_info->cmd_sets[type].cmds;
+		count = mode->priv_info->cmd_sets[type].count;
+		state = mode->priv_info->cmd_sets[type].state;
+	}
+	else{
+		if((type - DSI_CMD_SET_MAX) >= TOTAL_LEVEL)
+			goto error;
+		if(color_flag == 0){
+			cmds = cool_cmd[type - DSI_CMD_SET_MAX].cmds;
+			count = cool_cmd[type - DSI_CMD_SET_MAX].count;
+			state = cool_cmd[type - DSI_CMD_SET_MAX].state;
+		}
+		else{
+			cmds = warm_cmd[type - DSI_CMD_SET_MAX].cmds;
+			count = warm_cmd[type - DSI_CMD_SET_MAX].count;
+			state = warm_cmd[type - DSI_CMD_SET_MAX].state;
+		}
+	}
 
 	if (count == 0) {
 		pr_debug("[%s] No commands to be sent for state(%d)\n",
@@ -499,7 +559,7 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 		if (cmds->last_command)
 			cmds->msg.flags |= MIPI_DSI_MSG_LASTCOMMAND;
 
-		len = ops->transfer(panel->host, &cmds->msg);
+		len = panel->host->ops->transfer(panel->host, &cmds->msg);
 		if (len < 0) {
 			rc = len;
 			pr_err("failed to set cmds(%d), rc=%d\n", type, rc);
@@ -510,7 +570,9 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 					((cmds->post_wait_ms*1000)+10));
 		cmds++;
 	}
+
 error:
+	mutex_unlock(&panel->transfer_mutex);
 	return rc;
 }
 
@@ -618,6 +680,108 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 
 	mutex_unlock(&panel->panel_lock);
 	return rc;
+}
+
+extern int syna_tcm_glove_switch(bool en);
+void dsi_panel_set_ie_level(u32 ie_level)
+{
+	int rc = 0;
+
+	pr_debug("%s:set diplay panel ie_level is %d\n", __func__, ie_level);
+	if(set_panel->panel_power_state == 0){
+		pr_err("%s:in power off state.\n", __func__);
+		return;
+	}
+	switch (ie_level) {
+	case 10:
+		is_eye_care_mode = 1;
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_COMMAND, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_COLOR_COMMAND cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+	case 12:
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_RESUME, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_COLOR_RESUME cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+	case 14:
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_RESET, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_COLOR_RESET cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+	case 18:
+		is_eye_care_mode = 0;
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_RESTORE, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_COLOR_RESTORE cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+	case 92:
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_WEAK_SRE, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_WEAK_SRE cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+	case 94:
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_MIDDLE_SRE, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_MIDDLE_SRE cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+	case 96:
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_STRONG_SRE, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_STRONG_SRE cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+	case 110:
+		faceid_enable = 0;
+		break;
+	case 111:
+		faceid_enable = 1;
+		break;
+	case 178:
+		if(is_eye_care_mode == 1){
+			rc = dsi_panel_tx_cmd_set(set_panel,
+					DSI_CMD_SET_CLOSE_SRE_PAPERMODE, 0);
+			if (rc) {
+				pr_err("[%s] failed to send DSI_CMD_SET_CLOSE_SRE_PAPERMODE cmds, rc=%d\n",
+					set_panel->name, rc);
+			}
+		}else{
+			rc = dsi_panel_tx_cmd_set(set_panel,
+					DSI_CMD_SET_CLOSE_SRE_NORMALMODE, 0);
+			if (rc) {
+				pr_err("[%s] failed to send DSI_CMD_SET_CLOSE_SRE_NORMALMODE cmds, rc=%d\n",
+					set_panel->name, rc);
+			}
+		}
+		break;
+	case 180:
+		dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_PREPARE, 0);
+		dsi_panel_tx_cmd_set(set_panel, set_color_enable[1] + DSI_CMD_SET_MAX, set_color_enable[0]);
+		break;
+	case 260:
+		syna_tcm_glove_switch(0);
+		break;
+	case 261:
+		syna_tcm_glove_switch(1);
+		break;
+	default:
+		break;
+	}
+
+	return;
 }
 
 int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl)
@@ -1382,6 +1546,17 @@ const char *cmd_set_prop_map[DSI_CMD_SET_MAX] = {
 	"ROI not parsed from DTSI, generated dynamically",
 	"qcom,mdss-dsi-timing-switch-command",
 	"qcom,mdss-dsi-post-mode-switch-on-command",
+	"qcom,mdss-dsi-panel-color-temperature-command",
+	"qcom,mdss-dsi-panel-color-temperature-command-resume",
+	"qcom,mdss-dsi-panel-color-temperature-command-reset",
+	"qcom,mdss-dsi-panel-color-temperature-command-restore",
+	"qcom,mdss-dsi-panel-sre-weak-level",
+	"qcom,mdss-dsi-panel-sre-middle-level",
+	"qcom,mdss-dsi-panel-sre-strong-level",
+	"qcom,mdss-dsi-panel-sre-exit-papermode",
+	"qcom,mdss-dsi-panel-sre-exit-normal",
+	"qcom,mdss-dsi-panel-color-prepare",
+	"qcom,mdss-dsi-panel-color-unprepare"
 };
 
 const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
@@ -1406,6 +1581,17 @@ const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
 	"ROI not parsed from DTSI, generated dynamically",
 	"qcom,mdss-dsi-timing-switch-command-state",
 	"qcom,mdss-dsi-post-mode-switch-on-command-state",
+	"qcom,mdss-dsi-panel-color-temperature-command-state",
+	"qcom,mdss-dsi-panel-color-temperature-command-resume-state",
+	"qcom,mdss-dsi-panel-color-temperature-command-reset-state",
+	"qcom,mdss-dsi-panel-color-temperature-command-restore-state",
+	"qcom,mdss-dsi-panel-sre-weak-level-state",
+	"qcom,mdss-dsi-panel-sre-middle-level-state",
+	"qcom,mdss-dsi-panel-sre-strong-level-state",
+	"qcom,mdss-dsi-panel-sre-exit-papermode-state",
+	"qcom,mdss-dsi-panel-sre-exit-normal-state",
+	"qcom,mdss-dsi-panel-color-prepare-state",
+	"qcom,mdss-dsi-panel-color-unprepare-state"
 };
 
 static int dsi_panel_get_cmd_pkt_count(const char *data, u32 length, u32 *cnt)
@@ -1432,7 +1618,7 @@ static int dsi_panel_get_cmd_pkt_count(const char *data, u32 length, u32 *cnt)
 	return 0;
 }
 
-static int dsi_panel_create_cmd_packets(const char *data,
+int dsi_panel_create_cmd_packets(const char *data,
 					u32 length,
 					u32 count,
 					struct dsi_cmd_desc *cmd)
@@ -2787,6 +2973,7 @@ struct dsi_panel *dsi_panel_get(struct device *parent,
 	panel->panel_of_node = of_node;
 	drm_panel_init(&panel->drm_panel);
 	mutex_init(&panel->panel_lock);
+	mutex_init(&panel->transfer_mutex);
 	panel->parent = parent;
 	return panel;
 error:
@@ -2801,6 +2988,203 @@ void dsi_panel_put(struct dsi_panel *panel)
 
 	kfree(panel);
 }
+
+static ssize_t mdss_mdp_show_blank_event(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	int ret;
+
+	pr_debug("panel_power_state = %d\n", set_panel->panel_power_state);
+	ret = scnprintf(buf, PAGE_SIZE, "panel_power_on = %d\n",
+						set_panel->panel_power_state);
+
+	return ret;
+}
+
+static ssize_t mdss_fb_set_ie_level(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t len)
+{
+	u32 ie_level;
+
+	if (sscanf(buf, "%d", &ie_level) != 1) {
+		pr_err("sccanf buf error!\n");
+		return len;
+	}
+
+	dsi_panel_set_ie_level(ie_level);
+
+	return len;
+}
+
+static ssize_t mdss_fb_get_ie_level(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	int ret;
+	int sre_mode = 1;
+
+	ret = scnprintf(buf, PAGE_SIZE, "%d\n", sre_mode);
+
+	return ret;
+}
+
+static DEVICE_ATTR(msm_fb_ie_level, S_IRUGO | S_IWUSR,
+	mdss_fb_get_ie_level, mdss_fb_set_ie_level);
+static DEVICE_ATTR(show_blank_event, S_IRUGO,
+	mdss_mdp_show_blank_event, NULL);
+
+static struct attribute *mdss_fb_attrs[] = {
+	&dev_attr_show_blank_event.attr,
+	&dev_attr_msm_fb_ie_level.attr,
+	NULL,
+};
+
+static struct attribute_group mdss_fb_attr_group = {
+	.attrs = mdss_fb_attrs,
+};
+static int dsi_panel_parse_color_cmd(struct dsi_panel_cmd_set *cmd,
+					char *data,
+					u32 length)
+{
+	int rc;
+	u32 packet_count = 0;
+
+	rc = dsi_panel_get_cmd_pkt_count(data, length, &packet_count);
+	if (rc) {
+		pr_err("commands failed, rc=%d\n", rc);
+		goto error;
+	}
+
+	rc = dsi_panel_alloc_cmd_packets(cmd, packet_count);
+	if (rc) {
+		pr_err("failed to allocate cmd packets, rc=%d\n", rc);
+		goto error;
+	}
+
+	rc = dsi_panel_create_cmd_packets(data, length, packet_count,
+					  cmd->cmds);
+	if (rc) {
+		pr_err("failed to create cmd packets, rc=%d\n", rc);
+		goto error_free_mem;
+	}
+	cmd->state = DSI_CMD_SET_STATE_HS;
+
+	return rc;
+error_free_mem:
+	kfree(cmd->cmds);
+	cmd->cmds = NULL;
+error:
+	return rc;
+
+}
+
+static ssize_t dsi_panel_parse_color_data(void)
+{
+	int rc = 0;
+	/*the cool data < - > the info of the color temperature 9000k*/
+	char warm_data[32] = {0x29,0x01,0,0,0,0,0x19,0xC9,0,0,0,0,0xFF,0,
+			0,0,0,0,0xa8,0,0,0,0,0,0x53,0,0,0,0,0,0xFF,0};
+	/*the warm data < - > the info of the color temperature 5000k*/
+	char cool_data[32] = {0x29,0x01,0,0,0,0,0x19,0xC9,0,0,0,0,0xE6,0,
+			0,0,0,0,0xD3,0,0,0,0,0,0xFF,0,0,0,0,0,0xFF,0};
+	int i = 0;
+
+	/*
+	 *set cool_data[13] from 0xEC to 0xFF and set cool_data[19] from 0xE5 to
+	 *0xFF to realize 9000k to defalut.
+	 *set warm_cmd[19] from 0xC6 to 0xFF and set cool_data[25] from 0x70 to
+	 *0xFF to realize 5000k to defalut.
+	 *In order to achieve color temperature adjustment, we need to setting 20 levels
+	 *for cool data and warm data.
+	*/
+	do {
+		rc = dsi_panel_parse_color_cmd(&cool_cmd[i], cool_data, 32/*arry len*/);
+		if(rc < 0){
+			pr_err("%s:failed to set cool cmd\n", __func__);
+		}
+		rc = dsi_panel_parse_color_cmd(&warm_cmd[i], warm_data, 32/*arry len*/);
+		if(rc < 0){
+			pr_err("%s:failed to set warm cmd\n", __func__);
+		}
+
+		if(i < COOL_LEVEL_0)
+			cool_data[COOL_PARAM_1] += COOL_DELTA_1;
+		else
+			cool_data[COOL_PARAM_1] += COOL_DELTA_2;
+
+		if(i < COOL_LEVEL_1)
+			cool_data[COOL_PARAM_2] += COOL_DELTA_3;
+		else
+			cool_data[COOL_PARAM_2] += COOL_DELTA_4;
+
+		if(i < WARM_LEVEL_0)
+			warm_data[WARM_PARAM_1] += WARM_DELTA_1;
+		else
+			warm_data[WARM_PARAM_1] += WARM_DELTA_2;
+
+		if(i < WARM_LEVEL_1)
+			warm_data[WARM_PARAM_2] += WARM_DELTA_3;
+		else
+			warm_data[WARM_PARAM_2] += WARM_DELTA_4;
+		i++;
+	}while(i < TOTAL_LEVEL);
+
+	return rc;
+}
+
+static long color_panel_ioctl(struct file *file, unsigned int flags,
+						unsigned long value)
+{
+	pr_debug("%s:flags is %d, value is %ld\n", __func__, flags, value);
+	if(set_panel->panel_power_state == 0){
+		if(flags == SMARTISAN_IE_SET && value == 18){
+			is_eye_care_mode = 0;
+		}
+		if(flags == SMARTISAN_IE_SET && value == 10){
+			is_eye_care_mode = 1;
+		}
+		pr_err("%s:in power off state.\n", __func__);
+		return -EAGAIN;
+	}
+	switch (flags) {
+		case SMARTISAN_IE_SET:
+			dsi_panel_set_ie_level(value);
+			break;
+		case DSI_PANEL_RESET_PP:
+			is_color_mode = 0;
+			dsi_panel_set_ie_level(14);
+			break;
+		case DSI_PANEL_WARM_PP:
+			is_color_mode = 1;
+			set_color_enable[0] = 1;
+			set_color_enable[1] = value;
+			dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_PREPARE, 1);
+			dsi_panel_tx_cmd_set(set_panel, value + DSI_CMD_SET_MAX, 1);
+			dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_UNPREPARE, 0);
+			break;
+		case DSI_PANEL_COLD_PP:
+			is_color_mode = 1;
+			set_color_enable[0] = 0;
+			set_color_enable[1] = value;
+			dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_PREPARE, 0);
+			dsi_panel_tx_cmd_set(set_panel, value + DSI_CMD_SET_MAX, 0);
+			dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_UNPREPARE, 0);
+			break;
+		default:
+			break;
+	}
+	return SET_LEVEL_SUCCESS;
+}
+
+static const struct file_operations color_panel_fops = {
+	.owner		= THIS_MODULE,
+	.unlocked_ioctl	= color_panel_ioctl,
+};
+
+static struct miscdevice color_panel_dev = {
+	MISC_DYNAMIC_MINOR,
+	"color_panel",
+	&color_panel_fops
+};
 
 int dsi_panel_drv_init(struct dsi_panel *panel,
 		       struct mipi_dsi_host *host)
@@ -2855,6 +3239,16 @@ int dsi_panel_drv_init(struct dsi_panel *panel,
 		goto error_gpio_release;
 	}
 
+	rc = sysfs_create_group(&(panel->parent->kobj), &mdss_fb_attr_group);
+	if (rc)
+		pr_err("sysfs group creation failed, rc=%d\n", rc);
+
+	dsi_panel_parse_color_data();
+
+	rc = misc_register(&color_panel_dev);
+	if (rc)
+		pr_err("[%s] failed to register misc device, rc=%d\n", panel->name, rc);
+
 	goto exit;
 
 error_gpio_release:
@@ -2865,6 +3259,8 @@ error_vreg_put:
 	(void)dsi_panel_vreg_put(panel);
 exit:
 	mutex_unlock(&panel->panel_lock);
+	set_panel = panel;
+	panel->panel_power_state = 1;
 	return rc;
 }
 
@@ -3180,7 +3576,7 @@ int dsi_panel_update_pps(struct dsi_panel *panel)
 		goto error;
 	}
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PPS);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PPS, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_PPS cmds, rc=%d\n",
 			panel->name, rc);
@@ -3202,7 +3598,7 @@ int dsi_panel_set_lp1(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP1);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP1, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_LP1 cmd, rc=%d\n",
 		       panel->name, rc);
@@ -3220,7 +3616,7 @@ int dsi_panel_set_lp2(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP2);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP2, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_LP2 cmd, rc=%d\n",
 		       panel->name, rc);
@@ -3238,7 +3634,7 @@ int dsi_panel_set_nolp(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_NOLP cmd, rc=%d\n",
 		       panel->name, rc);
@@ -3256,7 +3652,6 @@ int dsi_panel_prepare(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-
 	if (panel->lp11_init) {
 		rc = dsi_panel_power_on(panel);
 		if (rc) {
@@ -3266,7 +3661,7 @@ int dsi_panel_prepare(struct dsi_panel *panel)
 		}
 	}
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_ON);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_ON, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_PRE_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3379,7 +3774,7 @@ int dsi_panel_send_roi_dcs(struct dsi_panel *panel, int ctrl_idx,
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ROI);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ROI, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_ROI cmds, rc=%d\n",
 				panel->name, rc);
@@ -3402,7 +3797,7 @@ int dsi_panel_switch(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_TIMING_SWITCH);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_TIMING_SWITCH, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_TIMING_SWITCH cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3422,7 +3817,7 @@ int dsi_panel_post_switch(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_TIMING_SWITCH);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_TIMING_SWITCH, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_POST_TIMING_SWITCH cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3441,8 +3836,7 @@ int dsi_panel_enable(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ON);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ON, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3463,7 +3857,7 @@ int dsi_panel_post_enable(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_ON);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_ON, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_POST_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3485,7 +3879,7 @@ int dsi_panel_pre_disable(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_OFF);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_OFF, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_PRE_OFF cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3505,10 +3899,9 @@ int dsi_panel_disable(struct dsi_panel *panel)
 		pr_err("invalid params\n");
 		return -EINVAL;
 	}
-
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_OFF);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_OFF, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_OFF cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3532,7 +3925,7 @@ int dsi_panel_unprepare(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_OFF);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_OFF, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_POST_OFF cmds, rc=%d\n",
 		       panel->name, rc);

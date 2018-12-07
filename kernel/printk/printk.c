@@ -405,6 +405,16 @@ u32 log_buf_len_get(void)
 	return log_buf_len;
 }
 
+char * log_first_idx_get(void)
+{
+	return (char *)&log_first_idx;
+}
+
+char * log_next_idx_get(void)
+{
+	return (char *)&log_next_idx;
+}
+
 /* human readable text of the record */
 static char *log_text(const struct printk_log *msg)
 {
@@ -543,6 +553,12 @@ static int log_store(int facility, int level,
 	u32 size, pad_len;
 	u16 trunc_msg_len = 0;
 
+	static char htext[32]={" "};
+	unsigned htlen = sizeof(htext);
+	int this_cpu = smp_processor_id();
+	htlen = snprintf(htext, sizeof(htext),":(%d)[%5d|%-15s]   ", this_cpu, current->pid, current->comm);
+	text_len += htlen;	
+
 	/* number of '\0' padding bytes to next message */
 	size = msg_used_size(text_len, dict_len, &pad_len);
 
@@ -567,7 +583,8 @@ static int log_store(int facility, int level,
 
 	/* fill message */
 	msg = (struct printk_log *)(log_buf + log_next_idx);
-	memcpy(log_text(msg), text, text_len);
+	memcpy(log_text(msg), htext, htlen);
+	memcpy(log_text(msg) + htlen, text, text_len-htlen);
 	msg->text_len = text_len;
 	if (trunc_msg_len) {
 		memcpy(log_text(msg) + text_len, trunc_msg, trunc_msg_len);

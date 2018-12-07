@@ -18,6 +18,7 @@
 #include "wcdcal-hwdep.h"
 #include <sound/jack.h>
 
+#define WCD_BTN_TUNING_DEBUG 1
 #define TOMBAK_MBHC_NC	0
 #define TOMBAK_MBHC_NO	1
 #define WCD_MBHC_DEF_BUTTONS 8
@@ -588,7 +589,10 @@ struct wcd_mbhc {
 	struct notifier_block psy_nb;
 	struct power_supply *usb_psy;
 	struct work_struct usbc_analog_work;
-
+	struct dentry *debugfs_mbhc;
+#ifdef WCD_BTN_TUNING_DEBUG
+	struct dentry *debugfs_btn_tuning;
+#endif
 	struct wcd_mbhc_fn *mbhc_fn;
 	bool force_linein;
 };

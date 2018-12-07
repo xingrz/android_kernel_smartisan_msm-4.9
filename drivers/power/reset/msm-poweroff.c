@@ -49,6 +49,8 @@
 #define SCM_DLOAD_MINIDUMP		0X20
 #define SCM_DLOAD_BOTHDUMPS	(SCM_DLOAD_MINIDUMP | SCM_DLOAD_FULLDUMP)
 
+extern const char linux_banner[];
+
 static int restart_mode;
 static void __iomem *restart_reason, *dload_type_addr;
 static bool scm_pmic_arbiter_disable_supported;
@@ -152,6 +154,7 @@ static bool get_dload_mode(void)
 	return dload_mode_enabled;
 }
 
+#ifndef _BUILD_USER
 static void enable_emergency_dload_mode(void)
 {
 	int ret;
@@ -178,6 +181,12 @@ static void enable_emergency_dload_mode(void)
 	if (ret)
 		pr_err("Failed to set secure EDLOAD mode: %d\n", ret);
 }
+#else
+static void enable_emergency_dload_mode(void)
+{
+
+}
+#endif
 
 static int dload_set(const char *val, struct kernel_param *kp)
 {
@@ -326,6 +335,8 @@ static void msm_restart_prepare(const char *cmd)
 			}
 		} else if (!strncmp(cmd, "edl", 3)) {
 			enable_emergency_dload_mode();
+		} else if (!strncmp(cmd, "ddr-test", 8)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_DDR_TEST);
 		} else {
 			__raw_writel(0x77665501, restart_reason);
 		}
@@ -374,6 +385,7 @@ static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
 	};
 
 	pr_notice("Going down for restart now\n");
+	pr_notice("%s\n",linux_banner);
 
 	msm_restart_prepare(cmd);
 
@@ -553,11 +565,29 @@ RESET_ATTR(dload_mode, 0644, show_dload_mode, store_dload_mode);
 #endif
 RESET_ATTR(emmc_dload, 0644, show_emmc_dload, store_emmc_dload);
 
+extern ssize_t show_offline_dump(struct kobject *kobj, struct attribute *attr,char *buf);
+extern size_t store_offline_dump(struct kobject *kobj, struct attribute *attr,const char *buf, size_t count);
+
+RESET_ATTR(offline_dump, 0644, show_offline_dump, store_offline_dump);
+
+extern ssize_t show_offline_dump_happen(struct kobject *kobj, struct attribute *attr,char *buf);
+extern size_t store_offline_dump_happen(struct kobject *kobj, struct attribute *attr,const char *buf, size_t count);
+RESET_ATTR(offline_dump_happen, 0644, show_offline_dump_happen, store_offline_dump_happen);
+
+
+extern ssize_t show_dump_happen(struct kobject *kobj, struct attribute *attr,char *buf);
+extern size_t store_dump_happen(struct kobject *kobj, struct attribute *attr,const char *buf, size_t count);
+RESET_ATTR(dump_happen, 0644, show_dump_happen, store_dump_happen);
+
+
 static struct attribute *reset_attrs[] = {
 	&reset_attr_emmc_dload.attr,
 #ifdef CONFIG_QCOM_MINIDUMP
 	&reset_attr_dload_mode.attr,
 #endif
+	&reset_attr_offline_dump.attr,
+	&reset_attr_offline_dump_happen.attr,
+	&reset_attr_dump_happen.attr,
 	NULL
 };
 
@@ -620,12 +650,12 @@ static int msm_restart_probe(struct platform_device *pdev)
 				"qcom,msm-imem-dload-type");
 	if (!np) {
 		pr_err("unable to find DT imem dload-type node\n");
-		goto skip_sysfs_create;
+		//goto skip_sysfs_create;
 	} else {
 		dload_type_addr = of_iomap(np, 0);
 		if (!dload_type_addr) {
 			pr_err("unable to map imem dload-type offset\n");
-			goto skip_sysfs_create;
+			//goto skip_sysfs_create;
 		}
 	}
 

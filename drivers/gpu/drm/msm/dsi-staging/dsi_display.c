@@ -51,6 +51,42 @@ static const struct of_device_id dsi_display_dt_match[] = {
 
 static struct dsi_display *main_display;
 
+static void dsi_display_ctrl_irq_update(struct dsi_display *display, bool en);
+
+static void dsi_display_mask_ctrl_error_interrupts(struct dsi_display *display)
+{
+	int i;
+	struct dsi_display_ctrl *ctrl;
+
+	if (!display)
+		return;
+
+	for (i = 0; (i < display->ctrl_count) &&
+			(i < MAX_DSI_CTRLS_PER_DISPLAY); i++) {
+		ctrl = &display->ctrl[i];
+		if (!ctrl)
+			continue;
+		dsi_ctrl_mask_error_status_interrupts(ctrl->ctrl);
+	}
+}
+
+static void dsi_display_ctrl_irq_update(struct dsi_display *display, bool en)
+{
+	int i;
+	struct dsi_display_ctrl *ctrl;
+
+	if (!display)
+		return;
+
+	for (i = 0; (i < display->ctrl_count) &&
+			(i < MAX_DSI_CTRLS_PER_DISPLAY); i++) {
+		ctrl = &display->ctrl[i];
+		if (!ctrl)
+			continue;
+		dsi_ctrl_irq_update(ctrl->ctrl, en);
+	}
+}
+
 void dsi_rect_intersect(const struct dsi_rect *r1,
 		const struct dsi_rect *r2,
 		struct dsi_rect *result)
@@ -110,7 +146,6 @@ int dsi_display_set_backlight(void *display, u32 bl_lvl)
 		       dsi_display->name, rc);
 		goto error;
 	}
-
 	rc = dsi_panel_set_backlight(panel, (u32)bl_temp);
 	if (rc)
 		pr_err("unable to set backlight\n");
@@ -358,7 +393,7 @@ static bool dsi_display_validate_reg_read(struct dsi_panel *panel)
 
 	lenp = config->status_valid_params ?: config->status_cmds_rlen;
 	mode = panel->cur_mode;
-	count = mode->priv_info->cmd_sets[DSI_CMD_SET_PANEL_STATUS].count;
+	count = config->status_cmd.count;
 
 	for (i = 0; i < count; i++)
 		len += lenp[i];
@@ -434,6 +469,14 @@ error:
 	return rc;
 }
 
+static int dsi_display_status_check_te(struct dsi_display *display)
+{
+	int rc = 0;
+	pr_debug(" ++\n");
+	/* TODO: wait for TE interrupt from panel */
+	return rc;
+}
+
 static int dsi_display_validate_status(struct dsi_display_ctrl *ctrl,
 		struct dsi_panel *panel)
 {
@@ -484,8 +527,8 @@ static int dsi_display_status_reg_read(struct dsi_display *display)
 	rc = dsi_display_validate_status(m_ctrl, display->panel);
 	if (rc <= 0) {
 		pr_err("[%s] read status failed on master,rc=%d\n",
-		       display->name, rc);
-		goto exit;
+		       __func__, rc);
+			goto exit;
 	}
 
 	if (!display->panel->sync_broadcast_en)
@@ -504,6 +547,11 @@ static int dsi_display_status_reg_read(struct dsi_display *display)
 		}
 	}
 exit:
+	if (rc <= 0){
+		dsi_display_ctrl_irq_update(display, false);
+		dsi_display_mask_ctrl_error_interrupts(display);
+	}
+
 	dsi_display_cmd_engine_disable(display);
 done:
 	return rc;
@@ -515,16 +563,6 @@ static int dsi_display_status_bta_request(struct dsi_display *display)
 
 	pr_debug(" ++\n");
 	/* TODO: trigger SW BTA and wait for acknowledgment */
-
-	return rc;
-}
-
-static int dsi_display_status_check_te(struct dsi_display *display)
-{
-	int rc = 0;
-
-	pr_debug(" ++\n");
-	/* TODO: wait for TE interrupt from panel */
 
 	return rc;
 }
@@ -872,6 +910,107 @@ error:
 	return rc;
 }
 
+static ssize_t debugfs_esd_trigger_check(struct file *file,
+				  const char __user *user_buf,
+				  size_t user_len,
+				  loff_t *ppos)
+{
+	struct dsi_display *display = file->private_data;
+	char *buf;
+	int rc = 0;
+	u32 esd_trigger;
+
+	if (!display)
+		return -ENODEV;
+
+	if (*ppos)
+		return 0;
+
+	if (user_len > sizeof(u32))
+		return -EINVAL;
+
+	buf = kzalloc(user_len, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	if (copy_from_user(buf, user_buf, user_len)) {
+		rc = -EINVAL;
+		goto error;
+	}
+
+	buf[user_len] = '\0'; /* terminate the string */
+
+	if (kstrtouint(buf, 10, &esd_trigger)) {
+		rc = -EINVAL;
+		goto error;
+	}
+
+	if (esd_trigger != 1) {
+		rc = -EINVAL;
+		goto error;
+	}
+
+	display->esd_trigger = esd_trigger;
+
+	if (display->esd_trigger) {
+		rc = dsi_panel_trigger_esd_attack(display->panel);
+		if (rc) {
+			pr_err("Failed to trigger ESD attack\n");
+			return rc;
+		}
+	}
+
+	rc = user_len;
+error:
+	kfree(buf);
+	return rc;
+}
+
+static ssize_t debugfs_reset_gpio_check(struct file *file,
+				  const char __user *user_buf,
+				  size_t user_len,
+				  loff_t *ppos)
+{
+	struct dsi_display *display = file->private_data;
+	char *buf;
+	int rc = 0;
+	u32 reset_gpio;
+
+	if (!display)
+		return -ENODEV;
+
+	if (*ppos)
+		return 0;
+
+	if (user_len > sizeof(u32))
+		return -EINVAL;
+
+	buf = kzalloc(user_len, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	if (copy_from_user(buf, user_buf, user_len)) {
+		rc = -EINVAL;
+		goto error;
+	}
+
+	buf[user_len] = '\0'; /* terminate the string */
+
+	if (kstrtouint(buf, 10, &reset_gpio)) {
+		rc = -EINVAL;
+		goto error;
+	}
+	pr_debug("%s:the reset_gpio value is %d\n", __func__, reset_gpio);
+
+	gpio_set_value(display->panel->reset_config.reset_gpio, reset_gpio);
+
+	rc = user_len;
+error:
+	kfree(buf);
+	return rc;
+}
+
+
 static ssize_t debugfs_misr_read(struct file *file,
 				 char __user *user_buf,
 				 size_t user_len,
@@ -948,6 +1087,15 @@ static const struct file_operations misr_data_fops = {
 	.write = debugfs_misr_setup,
 };
 
+static const struct file_operations reset_gpio_fops = {
+	.open = simple_open,
+	.write = debugfs_reset_gpio_check,
+};
+static const struct file_operations esd_trigger_fops = {
+	.open = simple_open,
+	.write = debugfs_esd_trigger_check,
+};
+
 static int dsi_display_debugfs_init(struct dsi_display *display)
 {
 	int rc = 0;
@@ -971,6 +1119,31 @@ static int dsi_display_debugfs_init(struct dsi_display *display)
 	if (IS_ERR_OR_NULL(dump_file)) {
 		rc = PTR_ERR(dump_file);
 		pr_err("[%s] debugfs create dump info file failed, rc=%d\n",
+		       display->name, rc);
+		goto error_remove_dir;
+	}
+
+	dump_file = debugfs_create_file("esd_trigger",
+					0644,
+					dir,
+					display,
+					&esd_trigger_fops);
+	if (IS_ERR_OR_NULL(dump_file)) {
+		rc = PTR_ERR(dump_file);
+		pr_err("[%s] debugfs for esd trigger file failed, rc=%d\n",
+		       display->name, rc);
+		goto error_remove_dir;
+	}
+
+	dump_file = debugfs_create_file("reset_gpio",
+					0644,
+					dir,
+					display,
+					&reset_gpio_fops);
+
+	if (IS_ERR_OR_NULL(dump_file)) {
+		rc = PTR_ERR(dump_file);
+		pr_err("[%s] debugfs for reset gpio file failed, rc=%d\n",
 		       display->name, rc);
 		goto error_remove_dir;
 	}
@@ -2475,23 +2648,6 @@ static void dsi_display_ctrl_isr_configure(struct dsi_display *display, bool en)
 	}
 }
 
-static void dsi_display_ctrl_irq_update(struct dsi_display *display, bool en)
-{
-	int i;
-	struct dsi_display_ctrl *ctrl;
-
-	if (!display)
-		return;
-
-	for (i = 0; (i < display->ctrl_count) &&
-			(i < MAX_DSI_CTRLS_PER_DISPLAY); i++) {
-		ctrl = &display->ctrl[i];
-		if (!ctrl)
-			continue;
-		dsi_ctrl_irq_update(ctrl->ctrl, en);
-	}
-}
-
 int dsi_pre_clkoff_cb(void *priv,
 			   enum dsi_clk_type clk,
 			   enum dsi_clk_state new_state)
@@ -3800,6 +3956,193 @@ static struct platform_driver dsi_display_driver = {
 	},
 };
 
+#define BUFFER_LENGTH 512
+
+extern int dsi_panel_create_cmd_packets(const char *data,
+					u32 length,
+					u32 count,
+					struct dsi_cmd_desc *cmd);
+static unsigned char recv[512];
+static unsigned int recv_len;
+static ssize_t dsi_access_sysfs_read_store(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+	int retval = -EINVAL;
+	unsigned char data[512];
+	u32 length = 0;
+	int index = 0;
+	char *input = (char *)buf;
+	char *token;
+	u32 flags = 0;
+	u32 temp_data;
+	struct dsi_cmd_desc cmd;
+	struct dsi_display_ctrl *m_ctrl = &main_display->ctrl[main_display->cmd_master_idx];
+
+	if (buf == NULL || (main_display->panel->panel_power_state == 0)){
+		return retval;
+	}
+	mutex_lock(&main_display->panel->transfer_mutex);
+	memset(data, 0, sizeof(data));
+	memset(recv, 0, sizeof(recv));
+
+	data[1] = 0x1;
+	data[2] = 0x0;
+	data[3] = 0x1;
+	data[4] = 0x0;
+	data[5] = 0x0;
+
+	while (input != NULL && index < BUFFER_LENGTH) {
+		token = strsep(&input, " ");
+		retval = sscanf(token, "%x", &temp_data);
+		if (retval < 0) {
+			pr_err("%s: Failed to convert \"%s\" to hex number\n",
+					__func__, token);
+			goto exit;
+		}
+		data[index] = temp_data;
+		if (index++ == 0)
+			index = 6;
+	}
+
+	length = index;
+
+	cmd.msg.flags = 0;
+	retval = dsi_panel_create_cmd_packets(data, length, 1, &cmd);
+	if (retval) {
+		pr_err("failed to create cmd packets, rc=%d\n", retval);
+		goto exit;
+	}
+
+	cmd.msg.rx_buf = recv;
+	cmd.msg.rx_len = data[6];
+	recv_len = cmd.msg.rx_len;
+
+	if (cmd.last_command) {
+		cmd.msg.flags |= MIPI_DSI_MSG_LASTCOMMAND;
+		flags |= DSI_CTRL_CMD_LAST_COMMAND;
+	}
+
+	flags |= (DSI_CTRL_CMD_FETCH_MEMORY | DSI_CTRL_CMD_READ);
+	retval = dsi_ctrl_cmd_transfer(m_ctrl->ctrl, &cmd.msg, flags);
+	if (retval <= 0) {
+		goto exit;
+	}
+
+	if (cmd.post_wait_ms)
+		usleep_range(cmd.post_wait_ms*1000,
+				((cmd.post_wait_ms*1000)+10));
+
+	retval = count;
+exit:
+	mutex_unlock(&main_display->panel->transfer_mutex);
+	return retval;
+}
+
+static ssize_t dsi_access_sysfs_read_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	unsigned int count = 0;
+	unsigned int idx;
+	unsigned int cnt;
+
+	for (idx = 0; idx < recv_len; idx++) {
+		cnt = snprintf(buf, PAGE_SIZE - count, "%02x \n", recv[idx]);
+		buf += cnt;
+		count += cnt;
+	}
+
+	return count;
+}
+
+static ssize_t dsi_access_sysfs_write_store(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+	int retval = -EINVAL;
+	unsigned char data[512];
+	u32 length = 0;
+	int index = 0;
+	char *input = (char *)buf;
+	char *token;
+	u32 flags = 0;
+	u32 temp_data;
+	struct dsi_cmd_desc cmd;
+	const struct mipi_dsi_host_ops *ops = main_display->panel->host->ops;
+
+	if (buf == NULL || (main_display->panel->panel_power_state == 0)){
+		return retval;
+	}
+	mutex_lock(&main_display->panel->transfer_mutex);
+	memset(data, 0, sizeof(data));
+	memset(recv, 0, sizeof(recv));
+
+	data[1] = 0x1;
+	data[2] = 0x0;
+	data[3] = 0x0;
+	data[4] = 0x0;
+	data[5] = 0x0;
+
+	while (input != NULL && index < BUFFER_LENGTH) {
+		token = strsep(&input, " ");
+		retval = sscanf(token, "%x", &temp_data);
+		if (retval < 0) {
+			pr_err("%s: Failed to convert \"%s\" to hex number\n",
+					__func__, token);
+			goto exit;
+		}
+		data[index] = temp_data;
+		if (index++ == 0)
+			index = 6;
+	}
+
+	length = index;
+
+	cmd.msg.flags = 0;
+	retval = dsi_panel_create_cmd_packets(data, length, 1, &cmd);
+	if (retval) {
+		pr_err("failed to create cmd packets, rc=%d\n", retval);
+		goto exit;
+	}
+
+	if (cmd.last_command) {
+		cmd.msg.flags |= MIPI_DSI_MSG_LASTCOMMAND | MIPI_DSI_MSG_USE_LPM;
+		flags |= DSI_CTRL_CMD_LAST_COMMAND;
+	}
+
+	flags |= DSI_CTRL_CMD_FETCH_MEMORY;
+
+	retval = ops->transfer(main_display->panel->host, &cmd.msg);
+	if (retval < 0) {
+		pr_err("failed to set cmds, rc=%d\n", retval);
+		goto exit;
+	}
+
+	if (cmd.post_wait_ms)
+		usleep_range(cmd.post_wait_ms*1000,
+				((cmd.post_wait_ms*1000)+10));
+
+	retval = count;
+exit:
+	mutex_unlock(&main_display->panel->transfer_mutex);
+	return retval;
+}
+
+static DEVICE_ATTR(read, (S_IRUSR|S_IRGRP|S_IWUSR | S_IWGRP),
+		        dsi_access_sysfs_read_show, dsi_access_sysfs_read_store);
+static DEVICE_ATTR(write, (S_IWUSR | S_IWGRP),
+		NULL, dsi_access_sysfs_write_store);
+
+static struct attribute *dsi_access_attrs[] = {
+	&dev_attr_read.attr,
+	&dev_attr_write.attr,
+	NULL,
+};
+
+static struct attribute_group dsi_access_attr_group = {
+	.attrs = dsi_access_attrs,
+};
+
 int dsi_display_dev_probe(struct platform_device *pdev)
 {
 	int rc = 0;
@@ -3917,7 +4260,12 @@ int dsi_display_dev_probe(struct platform_device *pdev)
 		pr_debug("Component_add success: %s\n", display->name);
 		if (!display_from_cmdline)
 			default_active_node = pdev->dev.of_node;
+
+		rc = sysfs_create_group(&pdev->dev.kobj, &dsi_access_attr_group);
+		if (rc)
+			pr_err("sysfs group creation failed, rc=%d\n", rc);
 	}
+
 	return rc;
 }
 
@@ -5249,6 +5597,11 @@ error_disable_panel:
 	(void)dsi_panel_disable(display->panel);
 error:
 	mutex_unlock(&display->display_lock);
+	if (!display->panel) {
+		pr_err("Invalid params\n");
+		rc = -EINVAL;
+	}else
+		display->panel->panel_power_state = 1;
 	return rc;
 }
 
@@ -5310,6 +5663,11 @@ int dsi_display_disable(struct dsi_display *display)
 		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
+	if (!display->panel) {
+		pr_err("invalid params\n");
+		return -EINVAL;
+	}else
+		display->panel->panel_power_state = 0;
 
 	mutex_lock(&display->display_lock);
 

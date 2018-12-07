@@ -20,6 +20,10 @@
 #include <linux/list_lru.h>
 #include <trace/events/writeback.h>
 #include "internal.h"
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+#include <linux/kfifo.h>
+#include <linux/delay.h>
+#endif
 
 /*
  * Inode locking rules:
@@ -191,6 +195,16 @@ int inode_init_always(struct super_block *sb, struct inode *inode)
 	inode->i_fsnotify_mask = 0;
 #endif
 	inode->i_flctx = NULL;
+
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+	mutex_init(&inode->i_count_mutex);
+	inode->i_write_count = 0;
+	inode->i_read_count = 0;
+	inode->i_write_times = 0;
+	inode->i_read_times = 0;
+	inode->i_filename = UNINIT_FILE_NAME;
+#endif
+
 	this_cpu_inc(nr_inodes);
 
 	return 0;
@@ -2123,3 +2137,66 @@ struct timespec current_time(struct inode *inode)
 	return timespec_trunc(now, inode->i_sb->s_time_gran);
 }
 EXPORT_SYMBOL(current_time);
+
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+extern int fsdbg_flag_last_data;
+extern struct kfifo fsdbg_fifo;
+
+void fsdbg_active_inodes_dump(void)
+{
+	unsigned int loop, inode_nums=0, rw_inode_nums=0;
+	struct inode *inode = NULL;
+	int ret, timeout;
+	char line_buf[512];
+
+	pr_debug("%s, dump active inodes rw statistics\n", __func__);
+
+	for (loop = 0; loop < (1U << i_hash_shift); loop++)
+	{
+		hlist_for_each_entry(inode, &inode_hashtable[loop], i_hash)
+		{
+			inode_nums++;
+			if((inode->i_write_times!=0)||(inode->i_read_times!=0))
+				rw_inode_nums++;
+			fsdbg_rw_info_to_fifo(inode);
+
+			timeout = 3;
+			do
+			{
+				timeout--;
+				if(timeout==0)
+					break;
+				ret = fsdbg_write_to_file();
+				if(ret)
+				{
+					printk("%s,  fifo almost full, wait fsdbg_write_to_file timeout=%d\n", __func__, timeout);
+					msleep(100);
+				}
+			}while(ret !=0);
+		}
+	}
+
+	sprintf(line_buf, "active inode_nums=%u, rw_inode_nums=%u\n", inode_nums, rw_inode_nums);
+	kfifo_in(&fsdbg_fifo, line_buf, strlen(line_buf));
+
+	// write unaligned data in fifo to file
+	fsdbg_flag_last_data = 1;
+	timeout = 3;
+	do
+	{
+		timeout--;
+		if(timeout==0)
+			break;
+
+		ret = fsdbg_write_to_file();
+		if(ret)
+		{
+			printk("%s,  fifo almost full, wait fsdbg_write_to_file timeout=%d\n", __func__, timeout);
+			msleep(100);
+		}
+	}while(ret !=0);
+
+}
+
+//EXPORT_SYMBOL(fsdbg_active_inodes_dump);
+#endif

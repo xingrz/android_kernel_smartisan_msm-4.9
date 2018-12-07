@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -35,6 +35,26 @@
 #define DSI_CMD_PPS_SIZE 135
 
 #define DSI_MODE_MAX 5
+#define COOL_PARAM_1 12
+#define COOL_PARAM_2 18
+#define WARM_PARAM_1 18
+#define WARM_PARAM_2 24
+#define WARM_LEVEL_0 8
+#define WARM_LEVEL_1 18
+#define COOL_LEVEL_0 13
+#define COOL_LEVEL_1 13
+#define WARM_DELTA_1 4
+#define WARM_DELTA_2 5
+#define WARM_DELTA_3 9
+#define WARM_DELTA_4 10
+#define COOL_DELTA_1 1
+#define COOL_DELTA_2 2
+#define COOL_DELTA_3 2
+#define COOL_DELTA_4 3
+#define TOTAL_LEVEL 20
+#define COLOR_DATA_MAX 19
+
+#define SET_LEVEL_SUCCESS 1
 
 enum dsi_panel_rotation {
 	DSI_PANEL_ROTATE_NONE = 0,
@@ -146,6 +166,7 @@ struct dsi_panel {
 	struct mipi_dsi_device mipi_device;
 
 	struct mutex panel_lock;
+	struct mutex transfer_mutex;
 	struct drm_panel drm_panel;
 	struct mipi_dsi_host *host;
 	struct device *parent;
@@ -172,6 +193,7 @@ struct dsi_panel {
 	bool ulps_enabled;
 	bool ulps_suspend_enabled;
 	bool allow_phy_power_off;
+	int panel_power_state;
 
 	bool panel_initialized;
 	bool te_using_watchdog_timer;
@@ -181,6 +203,11 @@ struct dsi_panel {
 
 	bool sync_broadcast_en;
 };
+#define DSIPANEL_IOCTL_MAGIC 'j'
+#define DSI_PANEL_WARM_PP _IOWR(DSIPANEL_IOCTL_MAGIC, 0x41, int)
+#define DSI_PANEL_COLD_PP _IOWR(DSIPANEL_IOCTL_MAGIC, 0x42, int)
+#define DSI_PANEL_RESET_PP _IOWR(DSIPANEL_IOCTL_MAGIC, 0x43, int)
+#define SMARTISAN_IE_SET _IOWR(DSIPANEL_IOCTL_MAGIC, 0x44, int)
 
 static inline bool dsi_panel_ulps_feature_enabled(struct dsi_panel *panel)
 {
@@ -205,6 +232,8 @@ static inline void dsi_panel_release_panel_lock(struct dsi_panel *panel)
 struct dsi_panel *dsi_panel_get(struct device *parent,
 				struct device_node *of_node,
 				int topology_override);
+
+int dsi_panel_trigger_esd_attack(struct dsi_panel *panel);
 
 void dsi_panel_put(struct dsi_panel *panel);
 

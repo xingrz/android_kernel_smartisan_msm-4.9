@@ -190,18 +190,10 @@ static int get_step_chg_jeita_setting_from_profile(struct step_chg_info *chip)
 	struct device_node *batt_node, *profile_node;
 	u32 max_fv_uv, max_fcc_ma;
 	const char *batt_type_str;
-	const __be32 *handle;
 	int batt_id_ohms, rc;
 	union power_supply_propval prop = {0, };
 
-	handle = of_get_property(chip->dev->of_node,
-			"qcom,battery-data", NULL);
-	if (!handle) {
-		pr_debug("ignore getting sw-jeita/step charging settings from profile\n");
-		return 0;
-	}
-
-	batt_node = of_find_node_by_phandle(be32_to_cpup(handle));
+	batt_node = of_find_node_by_name(chip->dev->of_node, "qcom,battery-data");
 	if (!batt_node) {
 		pr_err("Get battery data node failed\n");
 		return -EINVAL;
@@ -234,7 +226,7 @@ static int get_step_chg_jeita_setting_from_profile(struct step_chg_info *chip)
 		pr_err("battery type unavailable, rc:%d\n", rc);
 		return rc;
 	}
-	pr_debug("battery: %s detected, getting sw-jeita/step charging settings\n",
+	printk("battery: %s detected, getting sw-jeita/step charging settings\n",
 					batt_type_str);
 
 	rc = of_property_read_u32(profile_node, "qcom,max-voltage-uv",
@@ -619,7 +611,7 @@ static int step_chg_notifier_call(struct notifier_block *nb,
 
 	if ((strcmp(psy->desc->name, "battery") == 0)) {
 		__pm_stay_awake(chip->step_chg_ws);
-		schedule_delayed_work(&chip->status_change_work, 0);
+		schedule_delayed_work(&chip->status_change_work, HZ/5);
 	}
 
 	if ((strcmp(psy->desc->name, "bms") == 0)) {

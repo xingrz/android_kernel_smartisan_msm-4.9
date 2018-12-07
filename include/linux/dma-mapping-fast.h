@@ -27,6 +27,7 @@ struct dma_fast_smmu_mapping {
 
 	u32		min_iova_align;
 	struct page	*guard_page;
+	u32		force_guard_page_len;
 
 	unsigned int	bitmap_size;
 	unsigned long	*bitmap;

@@ -680,6 +680,12 @@ ifneq ($(CONFIG_FRAME_WARN),0)
 KBUILD_CFLAGS += $(call cc-option,-Wframe-larger-than=${CONFIG_FRAME_WARN})
 endif
 
+ifeq ($(SMARTISAN_BUILD_LINE), MOL)
+ifeq ($(TARGET_BUILD_VARIANT), user)
+KBUILD_CFLAGS  += -D_BUILD_USER=1
+endif
+endif
+
 # This selects the stack protector compiler flag. Testing it is delayed
 # until after .config has been reprocessed, in the prepare-compiler-check
 # target.

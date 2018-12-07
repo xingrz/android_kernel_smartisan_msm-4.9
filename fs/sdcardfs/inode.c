@@ -597,13 +597,13 @@ static const char *sdcardfs_follow_link(struct dentry *dentry, void **cookie)
 	return *cookie = buf;
 }
 #endif
-
+#if 0
 static int sdcardfs_permission_wrn(struct inode *inode, int mask)
 {
 	pr_debug("sdcardfs does not support permission. Use permission2.\n");
 	return -EINVAL;
 }
-
+#endif
 void copy_attrs(struct inode *dest, const struct inode *src)
 {
 	dest->i_mode = src->i_mode;
@@ -878,6 +878,9 @@ out:
 const struct inode_operations sdcardfs_symlink_iops = {
 	.permission2	= sdcardfs_permission,
 	.setattr2	= sdcardfs_setattr,
+#ifdef CONFIG_SDCARD_FS_XATTR
+	.listxattr	= sdcardfs_listxattr,
+#endif // CONFIG_SDCARD_FS_XATTR
 	/* XXX Following operations are implemented,
 	 *     but FUSE(sdcard) or FAT does not support them
 	 *     These methods are *NOT* perfectly tested.
@@ -890,7 +893,7 @@ const struct inode_operations sdcardfs_symlink_iops = {
 const struct inode_operations sdcardfs_dir_iops = {
 	.create		= sdcardfs_create,
 	.lookup		= sdcardfs_lookup,
-	.permission	= sdcardfs_permission_wrn,
+	//.permission	= sdcardfs_permission_wrn,
 	.permission2	= sdcardfs_permission,
 	.unlink		= sdcardfs_unlink,
 	.mkdir		= sdcardfs_mkdir,
@@ -899,6 +902,9 @@ const struct inode_operations sdcardfs_dir_iops = {
 	.setattr	= sdcardfs_setattr_wrn,
 	.setattr2	= sdcardfs_setattr,
 	.getattr	= sdcardfs_getattr,
+#ifdef CONFIG_SDCARD_FS_XATTR
+	.listxattr	= sdcardfs_listxattr,
+#endif // CONFIG_SDCARD_FS_XATTR
 	/* XXX Following operations are implemented,
 	 *     but FUSE(sdcard) or FAT does not support them
 	 *     These methods are *NOT* perfectly tested.
@@ -909,9 +915,12 @@ const struct inode_operations sdcardfs_dir_iops = {
 };
 
 const struct inode_operations sdcardfs_main_iops = {
-	.permission	= sdcardfs_permission_wrn,
+	//.permission	= sdcardfs_permission_wrn,
 	.permission2	= sdcardfs_permission,
 	.setattr	= sdcardfs_setattr_wrn,
 	.setattr2	= sdcardfs_setattr,
 	.getattr	= sdcardfs_getattr,
+#ifdef CONFIG_SDCARD_FS_XATTR
+	.listxattr	= sdcardfs_listxattr,
+#endif // SDCARDFS_XATTR
 };

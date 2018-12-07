@@ -11,7 +11,6 @@
  * GNU General Public License for more details.
  *
  */
-
 #include <linux/time.h>
 #include <linux/of.h>
 #include <linux/iopoll.h>
@@ -33,6 +32,7 @@
 #include "ufs-qcom-ice.h"
 #include "ufs-qcom-debugfs.h"
 #include <linux/clk/qcom.h>
+#include <smartisan/hwinfo.h>
 
 #define MAX_PROP_SIZE		   32
 #define VDDP_REF_CLK_MIN_UV        1200000
@@ -1987,8 +1987,7 @@ static void ufs_qcom_pm_qos_remove(struct ufs_qcom_host *host)
 }
 #endif /* CONFIG_SMP */
 
-#define	ANDROID_BOOT_DEV_MAX	30
-static char android_boot_dev[ANDROID_BOOT_DEV_MAX];
+char android_boot_dev[ANDROID_BOOT_DEV_MAX];
 
 #ifndef MODULE
 static int __init get_android_boot_dev(char *str)
@@ -2696,7 +2695,7 @@ static int ufs_qcom_probe(struct platform_device *pdev)
 {
 	int err;
 	struct device *dev = &pdev->dev;
-	struct device_node *np = dev->of_node;
+//	struct device_node *np = dev->of_node;
 
 	/*
 	 * On qcom platforms, bootdevice is the primary storage
@@ -2710,12 +2709,20 @@ static int ufs_qcom_probe(struct platform_device *pdev)
 	 * Hence, check for the connected device early-on & don't turn-off
 	 * the regulators.
 	 */
+#if 0
 	if (of_property_read_bool(np, "non-removable") &&
 	    strlen(android_boot_dev) &&
 	    strcmp(android_boot_dev, dev_name(dev)))
 		return -ENODEV;
+#endif
 
-	/* Perform generic probe */
+    if( !strcmp("1da4000.ufshc_card", dev_name(dev))
+            && get_ufs2_support() == 0) {
+		dev_err(dev, "ufshcd_pltfrm_init() no ufs2\n");
+        return -ENODEV;
+    }
+
+    /* Perform generic probe */
 	err = ufshcd_pltfrm_init(pdev, &ufs_hba_qcom_variant);
 	if (err)
 		dev_err(dev, "ufshcd_pltfrm_init() failed %d\n", err);

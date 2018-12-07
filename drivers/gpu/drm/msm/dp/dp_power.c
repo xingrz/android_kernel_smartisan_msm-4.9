@@ -19,6 +19,15 @@
 
 #define DP_CLIENT_NAME_SIZE	20
 
+#define HW_VERSION_0       129    //gpio 129
+#define HW_VERSION_1       122    //gpio 122
+#define HW_VERSION_2       43     //gpio 43
+#define GPIO_VALUE_GET(v) gpiod_get_value_cansleep(gpio_to_desc(v))
+#define HW_VERSION_ID  ((GPIO_VALUE_GET(HW_VERSION_0) << 2) | (GPIO_VALUE_GET(HW_VERSION_1) << 1) | (GPIO_VALUE_GET(HW_VERSION_2)))
+
+static int hw_version;
+static int uart_state;
+
 struct dp_power_private {
 	struct dp_parser *parser;
 	struct platform_device *pdev;
@@ -317,7 +326,7 @@ static int dp_power_request_gpios(struct dp_power_private *power)
 	struct device *dev;
 	struct dss_module_power *mp;
 	static const char * const gpio_names[] = {
-		"aux_enable", "aux_sel", "usbplug_cc",
+		"uart_sel", "mic_sel", "usbplug_cc",
 	};
 
 	if (!power) {
@@ -370,10 +379,27 @@ static void dp_power_set_gpio(struct dp_power_private *power, bool flip)
 			pr_debug("gpio %s, value %d\n", config->gpio_name,
 				config->value);
 
+			if (dp_power_find_gpio(config->gpio_name, "mic-sel"))
+			{
+				pr_info("find mic sel, disable mic");
+				gpio_direction_output(config->gpio, 0);
+			}
+
 			if (dp_power_find_gpio(config->gpio_name, "aux-en") ||
 			    dp_power_find_gpio(config->gpio_name, "aux-sel"))
 				gpio_direction_output(config->gpio,
 					config->value);
+			else if (dp_power_find_gpio(config->gpio_name, "uart-sel"))
+			{
+				hw_version = HW_VERSION_ID;
+				uart_state = gpio_get_value(config->gpio);
+				if (hw_version && !uart_state)
+					pr_info("dvt2 find uart, disable uart");
+				else if (!hw_version && uart_state)
+					pr_info("dvt1 find uart, disable uart");
+				gpio_direction_output(config->gpio, !!hw_version);
+				gpio_set_value(config->gpio, !!hw_version); //disable uart, dvt1 set 0, dvt2 set 1
+			}
 			else
 				gpio_set_value(config->gpio, config->value);
 
@@ -402,6 +428,28 @@ static int dp_power_config_gpios(struct dp_power_private *power, bool flip,
 		dp_power_set_gpio(power, flip);
 	} else {
 		for (i = 0; i < mp->num_gpio; i++) {
+			if (dp_power_find_gpio(config[i].gpio_name, "uart-sel"))
+			{
+				if (hw_version && !uart_state)
+				{
+					pr_info("dvt2 enable uart");
+					gpio_set_value(config->gpio, 0); //enable uart, dvt1 set 1, dvt2 set 0
+				}
+				else if (!hw_version && uart_state)
+				{
+					pr_info("dvt1 enable uart");
+					gpio_set_value(config->gpio, 1); //enable uart, dvt1 set 1, dvt2 set 0
+				}
+				gpio_free(config[i].gpio);
+				continue;
+			}
+			if (dp_power_find_gpio(config[i].gpio_name, "mic-sel"))
+			{
+				pr_info("mic enable\n");
+				gpio_set_value(config[i].gpio, 1);
+				gpio_free(config[i].gpio);
+				continue;
+			}
 			gpio_set_value(config[i].gpio, 0);
 			gpio_free(config[i].gpio);
 		}

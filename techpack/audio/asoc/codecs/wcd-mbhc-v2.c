@@ -9,6 +9,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+#define DEBUG
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -17,6 +18,7 @@
 #include <linux/device.h>
 #include <linux/printk.h>
 #include <linux/ratelimit.h>
+#include <linux/debugfs.h>
 #include <linux/list.h>
 #include <linux/bitops.h>
 #include <linux/delay.h>
@@ -32,6 +34,7 @@
 #include "wcd-mbhc-legacy.h"
 #include "wcd-mbhc-adc.h"
 #include "wcd-mbhc-v2-api.h"
+#include "sdm845.h"
 
 void wcd_mbhc_jack_report(struct wcd_mbhc *mbhc,
 			  struct snd_soc_jack *jack, int status, int mask)
@@ -115,7 +118,6 @@ static void wcd_program_btn_threshold(const struct wcd_mbhc *mbhc, bool micbias)
 void wcd_enable_curr_micbias(const struct wcd_mbhc *mbhc,
 				const enum wcd_mbhc_cs_mb_en_flag cs_mb_en)
 {
-
 	/*
 	 * Some codecs handle micbias/pullup enablement in codec
 	 * drivers itself and micbias is not needed for regular
@@ -527,6 +529,12 @@ void wcd_mbhc_hs_elec_irq(struct wcd_mbhc *mbhc, int irq_type,
 	int irq;
 
 	WCD_MBHC_RSC_ASSERT_LOCKED(mbhc);
+
+	if (enable) {
+		pr_debug("%s: workaround disable electircal detection: %d\n", __func__,
+			enable);
+		enable = false;
+	}
 
 	if (irq_type == WCD_MBHC_ELEC_HS_INS)
 		irq = mbhc->intr_ids->mbhc_hs_ins_intr;
@@ -1289,7 +1297,7 @@ static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 	 */
 	if (mbhc->mbhc_cfg->enable_usbc_analog) {
 		mbhc->hphl_swh = 1;
-		mbhc->gnd_swh = 1;
+		mbhc->gnd_swh = 0;
 
 		if (mbhc->mbhc_cb->hph_pull_up_control)
 			mbhc->mbhc_cb->hph_pull_up_control(codec, I_OFF);
@@ -1330,7 +1338,6 @@ static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 	wcd_program_hs_vref(mbhc);
 
 	wcd_program_btn_threshold(mbhc, false);
-
 
 	reinit_completion(&mbhc->btn_press_compl);
 
@@ -1475,16 +1482,115 @@ static int wcd_mbhc_set_keycode(struct wcd_mbhc *mbhc)
 	return result;
 }
 
+extern int get_hw_version_id(void);
+bool msm_usbc_swap_gnd_init(struct snd_soc_card *card)
+{
+	int ret = true;
+	int hw_version = -1;
+	bool is_dvt1 = false;
+	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
+	static int initialized = false;
+	struct pinctrl_state *en2_pinctrl_active;
+	struct pinctrl_state *en2_pinctrl_sleep;
+	struct pinctrl_state *en2_pinctrl_default;
+
+	if (initialized)
+		return true;
+
+	hw_version = get_hw_version_id();
+	if (hw_version == 0)
+		is_dvt1 = true;
+	else
+		is_dvt1 = false;
+
+	dev_info(card->dev, "Hardward Board Version: 0x%x, is_dvt1: %d\n",
+		hw_version, is_dvt1);
+
+	if (!pdata->usbc_en2_gpio_p) {
+		/* if active and usbc_en2_gpio undefined, get pin */
+		pdata->usbc_en2_gpio_p = devm_pinctrl_get(card->dev);
+		if (IS_ERR_OR_NULL(pdata->usbc_en2_gpio_p)) {
+			dev_err(card->dev,
+				"%s: Can't get EN2 gpio pinctrl:%ld\n",
+				__func__,
+				PTR_ERR(pdata->usbc_en2_gpio_p));
+			pdata->usbc_en2_gpio_p = NULL;
+			ret = false;
+			goto err1;
+		}
+	}
+
+	pdata->usbc_en2_gpio = of_get_named_gpio(card->dev->of_node,
+				    "qcom,usbc-analog-en2-gpio", 0);
+	if (!gpio_is_valid(pdata->usbc_en2_gpio)) {
+		dev_err(card->dev, "%s, property %s not in node %s",
+			__func__, "qcom,usbc-analog-en2-gpio",
+			card->dev->of_node->full_name);
+		ret = false;
+		goto err1;
+	}
+
+	en2_pinctrl_active = pinctrl_lookup_state(pdata->usbc_en2_gpio_p,
+		is_dvt1 ? "aud_active_dvt1" : "aud_active_dvt2");
+	if (IS_ERR_OR_NULL(en2_pinctrl_active)) {
+		dev_err(card->dev,
+			"%s: Cannot get aud_active pinctrl state:%ld\n",
+			__func__, PTR_ERR(en2_pinctrl_active));
+		ret = false;
+		goto err1;
+	}
+
+	en2_pinctrl_sleep = pinctrl_lookup_state(pdata->usbc_en2_gpio_p,
+		is_dvt1 ? "aud_sleep_dvt1" : "aud_sleep_dvt2");
+	if (IS_ERR_OR_NULL(en2_pinctrl_sleep)) {
+		dev_err(card->dev,
+			"%s: Cannot get aud_sleep pinctrl state:%ld\n",
+			__func__, PTR_ERR(en2_pinctrl_sleep));
+		ret = false;
+		goto err1;
+	}
+
+	en2_pinctrl_default = pinctrl_lookup_state(pdata->usbc_en2_gpio_p, "default");
+	if (IS_ERR_OR_NULL(en2_pinctrl_default)) {
+		dev_err(card->dev,
+			"%s: Cannot get default pinctrl state:%ld\n",
+			__func__, PTR_ERR(en2_pinctrl_default));
+		ret = false;
+		goto err1;
+	}
+
+	pdata->en2_pinctrl_active = en2_pinctrl_active;
+	pdata->en2_pinctrl_sleep = en2_pinctrl_sleep;
+	pdata->en2_pinctrl_default = en2_pinctrl_default;
+
+	initialized = true;
+err1:
+	return ret;
+}
+EXPORT_SYMBOL(msm_usbc_swap_gnd_init);
+
 static int wcd_mbhc_usb_c_analog_setup_gpios(struct wcd_mbhc *mbhc,
 					     bool active)
 {
 	int rc = 0;
-	struct usbc_ana_audio_config *config =
-		&mbhc->mbhc_cfg->usbc_analog_cfg;
+	struct wcd_mbhc_config *mbhc_cfg = mbhc->mbhc_cfg;
+	struct usbc_ana_audio_config *config = &mbhc_cfg->usbc_analog_cfg;
+	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_card *card = codec->component.card;
+	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 	union power_supply_propval pval;
+	static bool last_state = false;
+	struct pinctrl_state *en2_pinctrl_active = NULL;
+	struct pinctrl_state *en2_pinctrl_sleep = NULL;
+	struct pinctrl *usbc_en2_gpio_p = NULL;
 
 	dev_dbg(mbhc->codec->dev, "%s: setting GPIOs active = %d\n",
 		__func__, active);
+
+	msm_usbc_swap_gnd_init(card);
+	usbc_en2_gpio_p = pdata->usbc_en2_gpio_p;
+	en2_pinctrl_active = pdata->en2_pinctrl_active;
+	en2_pinctrl_sleep = pdata->en2_pinctrl_sleep;
 
 	memset(&pval, 0, sizeof(pval));
 
@@ -1500,6 +1606,13 @@ static int wcd_mbhc_usb_c_analog_setup_gpios(struct wcd_mbhc *mbhc,
 		if (config->usbc_en1_gpio_p)
 			rc = msm_cdc_pinctrl_select_active_state(
 				config->usbc_en1_gpio_p);
+		if (rc == 0 && (en2_pinctrl_active && en2_pinctrl_sleep && usbc_en2_gpio_p)) {
+			dev_info(mbhc->codec->dev, "last state is %d\n", last_state);
+			if (last_state)
+				pinctrl_select_state(usbc_en2_gpio_p, en2_pinctrl_active);
+			else
+				pinctrl_select_state(usbc_en2_gpio_p, en2_pinctrl_sleep);
+		}
 		if (rc == 0 && config->usbc_force_gpio_p)
 			rc = msm_cdc_pinctrl_select_active_state(
 				config->usbc_force_gpio_p);
@@ -1524,8 +1637,10 @@ static int wcd_mbhc_usb_c_analog_setup_gpios(struct wcd_mbhc *mbhc,
 		}
 
 		mbhc->usbc_mode = POWER_SUPPLY_TYPEC_NONE;
-		if (mbhc->mbhc_cfg->swap_gnd_mic)
-			mbhc->mbhc_cfg->swap_gnd_mic(mbhc->codec, false);
+		if (mbhc->mbhc_cfg->swap_gnd_mic) {
+			last_state = mbhc->mbhc_cfg->swap_gnd_mic(mbhc->codec, false);
+			dev_info(mbhc->codec->dev, "this state is %d\n", last_state);
+		}
 	}
 
 	return rc;
@@ -1825,6 +1940,165 @@ void wcd_mbhc_stop(struct wcd_mbhc *mbhc)
 }
 EXPORT_SYMBOL(wcd_mbhc_stop);
 
+#ifdef CONFIG_DEBUG_FS
+static ssize_t wcd_mbhc_debug_read(struct file *file, char __user *buf,
+			      size_t count, loff_t *pos)
+{
+	const int size = 768;
+	char buffer[size];
+	int n = 0;
+	struct wcd_mbhc *mbhc = file->private_data;
+
+	n = scnprintf(buffer, size - n, "Insert detect insert = %d\n",
+		      mbhc->hph_status);
+	buffer[n] = 0;
+
+	return simple_read_from_buffer(buf, count, pos, buffer, n);
+}
+
+static int codec_debug_open(struct inode *inode, struct file *file)
+{
+	file->private_data = inode->i_private;
+	return 0;
+}
+
+static const struct file_operations mbhc_debug_ops = {
+	.open = codec_debug_open,
+	.read = wcd_mbhc_debug_read,
+};
+
+#ifdef WCD_BTN_TUNING_DEBUG
+static ssize_t wcd_mbhc_btn_tuning_read (struct file *file, char __user *buf,
+			      size_t count, loff_t *pos)
+{
+	struct wcd_mbhc *mbhc = file->private_data;
+	struct wcd_mbhc_btn_detect_cfg *btn_det;
+	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_card *card = codec->component.card;
+	s16 *btn_low, *btn_high;
+	char *buffer;
+	int i, ret, n = 0;
+
+	if (mbhc->mbhc_cfg->calibration == NULL) {
+		dev_err(card->dev, "%s: calibration data is NULL\n", __func__);
+		return -EINVAL;
+	}
+
+	buffer = kzalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!buffer) {
+		dev_err(codec->dev, "alloc buffer failed\n");
+		return -ENOMEM;
+	}
+
+	btn_det = WCD_MBHC_CAL_BTN_DET_PTR(mbhc->mbhc_cfg->calibration);
+	btn_low = btn_det->_v_btn_low;
+	btn_high = ((void *)&btn_det->_v_btn_low) +
+			(sizeof(btn_det->_v_btn_low[0]) * btn_det->num_btn);
+
+	for (i = 0; i < 8; i++) {
+		n += scnprintf(buffer+n, PAGE_SIZE-n, "btn[%d] = %d\n", i, btn_high[i]);
+	}
+
+	ret = simple_read_from_buffer(buf, count, pos, buffer, n);
+	kfree(buffer);
+	return ret;
+}
+
+static ssize_t wcd_mbhc_btn_tuning_write (struct file *file, const char __user *buf,
+					  size_t count, loff_t *pos)
+{
+	struct wcd_mbhc *mbhc = file->private_data;
+	struct snd_soc_codec *codec = mbhc->codec;
+	struct snd_soc_card *card = codec->component.card;
+	struct wcd_mbhc_btn_detect_cfg *btn_det;
+	s16 *btn_low, *btn_high;
+	char *kbuf;
+	int btn[8];
+	int rc, i;
+
+	if (mbhc->mbhc_cfg->calibration == NULL) {
+		dev_err(card->dev, "%s: calibration data is NULL\n", __func__);
+		return -EINVAL;
+	}
+
+	kbuf = kzalloc(count, GFP_KERNEL);
+	if (!kbuf) {
+		dev_err(codec->dev, "alloc kbuf failed.\n");
+		return -ENOMEM;
+	}
+
+	rc = simple_write_to_buffer(kbuf, count, pos, buf, count);
+	if (rc != count) {
+		kfree(kbuf);
+		return -EIO;
+	}
+
+	kbuf[count] = '\0';
+	rc = sscanf(kbuf, "%d,%d,%d,%d,%d,%d,%d,%d",
+			btn, btn+1, btn+2, btn+3,
+			btn+4, btn+5, btn+6, btn+7);
+	kfree(kbuf);
+
+	if (rc < 0) {
+		dev_err(codec->dev, "input error.\n");
+		return -EINVAL;
+	}
+
+	btn_det = WCD_MBHC_CAL_BTN_DET_PTR(mbhc->mbhc_cfg->calibration);
+	btn_low = btn_det->_v_btn_low;
+	btn_high = ((void *)&btn_det->_v_btn_low) +
+			(sizeof(btn_det->_v_btn_low[0]) * btn_det->num_btn);
+
+	dev_info(codec->dev, "Got from user:\n");
+	for (i = 0; i < 8; i++) {
+		dev_info(codec->dev, "btn[%d] = %d\n", i, btn[i]);
+		btn_high[i] = (s16)btn[i];
+	}
+
+	// update
+	wcd_program_btn_threshold(mbhc, false);
+
+	return count;
+}
+
+static const struct file_operations mbhc_btn_tuning_ops = {
+	.open  = codec_debug_open,
+	.read  = wcd_mbhc_btn_tuning_read,
+	.write = wcd_mbhc_btn_tuning_write,
+};
+#endif
+
+static void wcd_init_debugfs(struct wcd_mbhc *mbhc)
+{
+	mbhc->debugfs_mbhc =
+	    debugfs_create_file("wcd_mbhc", S_IFREG | S_IRUGO,
+				NULL, mbhc, &mbhc_debug_ops);
+#ifdef WCD_BTN_TUNING_DEBUG
+	mbhc->debugfs_btn_tuning =
+	    debugfs_create_file("wcd_btn_tuning", S_IWUSR | S_IRUSR,
+				NULL, mbhc, &mbhc_btn_tuning_ops);
+#endif
+}
+
+static void wcd_cleanup_debugfs(struct wcd_mbhc *mbhc)
+{
+	if (mbhc->debugfs_mbhc)
+		debugfs_remove(mbhc->debugfs_mbhc);
+#ifdef WCD_BTN_TUNING_DEBUG
+	if (mbhc->debugfs_btn_tuning)
+		debugfs_remove(mbhc->debugfs_btn_tuning);
+#endif
+}
+#else
+static void wcd_init_debugfs(struct wcd_mbhc *mbhc)
+{
+}
+
+static void wcd_cleanup_debugfs(struct wcd_mbhc *mbhc)
+{
+}
+#endif
+
 /*
  * wcd_mbhc_init : initialize MBHC internal structures.
  *
@@ -2072,6 +2346,8 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 		goto err_hphr_ocp_irq;
 	}
 
+	wcd_init_debugfs(mbhc);
+
 	pr_debug("%s: leave ret %d\n", __func__, ret);
 	return ret;
 
@@ -2123,6 +2399,7 @@ void wcd_mbhc_deinit(struct wcd_mbhc *mbhc)
 	mutex_destroy(&mbhc->codec_resource_lock);
 	mutex_destroy(&mbhc->hphl_pa_lock);
 	mutex_destroy(&mbhc->hphr_pa_lock);
+	wcd_cleanup_debugfs(mbhc);
 }
 EXPORT_SYMBOL(wcd_mbhc_deinit);
 

@@ -28,6 +28,7 @@
 #ifdef CONFIG_COMPAT
 #include <linux/compat.h>
 #endif
+#include <smartisan/hwstate.h>
 
 struct nqx_platform_data {
 	unsigned int irq_gpio;
@@ -209,6 +210,11 @@ static ssize_t nfc_read(struct file *filp, char __user *buf,
 
 	/* Read data */
 	ret = i2c_master_recv(nqx_dev->client, tmp, count);
+
+	/* pn5xx seems to be slow in handling I2C read requests
+	 * so add 1ms delay after recv operation */
+	usleep_range(1000, 1100);
+
 	if (ret < 0) {
 		dev_err(&nqx_dev->client->dev,
 			"%s: i2c_master_recv returned %d\n", __func__, ret);
@@ -744,10 +750,12 @@ static int nfcc_hw_check(struct i2c_client *client, struct nqx_dev *nqx_dev)
 	/*Disable NFC by default to save power on boot*/
 	gpio_set_value(enable_gpio, 0);/* ULPM: Disable */
 	ret = 0;
+	smartisan_hwstate_set("nfc", "ok");
 	goto done;
 
 err_nfcc_hw_check:
 	ret = -ENXIO;
+	smartisan_hwstate_set("nfc", "fail");
 	dev_err(&client->dev,
 		"%s: - NFCC HW not available\n", __func__);
 done:
@@ -768,8 +776,8 @@ static int nqx_clock_select(struct nqx_dev *nqx_dev)
 	if (nqx_dev->s_clk == NULL)
 		goto err_clk;
 
-	if (nqx_dev->clk_run == false)
-		r = clk_prepare_enable(nqx_dev->s_clk);
+	//if (nqx_dev->clk_run == false)
+	//	r = clk_prepare_enable(nqx_dev->s_clk);
 
 	if (r)
 		goto err_clk;
@@ -792,7 +800,7 @@ static int nqx_clock_deselect(struct nqx_dev *nqx_dev)
 
 	if (nqx_dev->s_clk != NULL) {
 		if (nqx_dev->clk_run == true) {
-			clk_disable_unprepare(nqx_dev->s_clk);
+			//clk_disable_unprepare(nqx_dev->s_clk);
 			nqx_dev->clk_run = false;
 		}
 		return 0;

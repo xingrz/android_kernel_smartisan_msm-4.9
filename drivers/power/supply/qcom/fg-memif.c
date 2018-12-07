@@ -9,7 +9,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-
+ 
 #define pr_fmt(fmt)	"FG: %s: " fmt, __func__
 
 #include "fg-core.h"
@@ -746,7 +746,7 @@ out:
 	return rc;
 }
 
-#define MEM_GNT_WAIT_TIME_US	10000
+#define MEM_GNT_WAIT_TIME_US	20000
 #define MEM_GNT_RETRIES		50
 static int fg_direct_mem_request(struct fg_chip *chip, bool request)
 {
@@ -781,7 +781,7 @@ static int fg_direct_mem_request(struct fg_chip *chip, bool request)
 	 * HW takes 5 cycles (200 KHz clock) to grant access after requesting
 	 * for DMA. Wait for 40 us before polling for MEM_GNT first time.
 	 */
-	usleep_range(40, 41);
+	usleep_range(100, 110);
 
 	while (i < MEM_GNT_RETRIES) {
 		rc = fg_read(chip, MEM_IF_INT_RT_STS(chip), &val, 1);

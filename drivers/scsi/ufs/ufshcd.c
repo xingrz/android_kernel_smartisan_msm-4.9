@@ -52,6 +52,8 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/ufs.h>
 
+int pro_flag = 0;
+
 #ifdef CONFIG_DEBUG_FS
 
 static int ufshcd_tag_req_type(struct request *rq)
@@ -3822,6 +3824,9 @@ int ufshcd_map_desc_id_to_length(struct ufs_hba *hba,
 	case QUERY_DESC_IDN_INTERCONNECT:
 		*desc_len = hba->desc_size.interc_desc;
 		break;
+	case QUERY_DESC_IDN_HEALTH:
+		*desc_len = hba->desc_size.health_desc;
+		break;
 	case QUERY_DESC_IDN_STRING:
 		*desc_len = QUERY_DESC_MAX_SIZE;
 		break;
@@ -3937,6 +3942,11 @@ static inline int ufshcd_read_power_desc(struct ufs_hba *hba,
 int ufshcd_read_device_desc(struct ufs_hba *hba, u8 *buf, u32 size)
 {
 	return ufshcd_read_desc(hba, QUERY_DESC_IDN_DEVICE, 0, buf, size);
+}
+
+int ufshcd_read_device_health(struct ufs_hba *hba, u8 *buf, u32 size)
+{
+	return ufshcd_read_desc(hba, QUERY_DESC_IDN_HEALTH, 0, buf, size);
 }
 
 /**
@@ -7443,6 +7453,7 @@ static void ufshcd_set_active_icc_lvl(struct ufs_hba *hba)
 			__func__, icc_level, ret);
 }
 
+extern char android_boot_dev[ANDROID_BOOT_DEV_MAX];
 /**
  * ufshcd_scsi_add_wlus - Adds required W-LUs
  * @hba: per-adapter instance
@@ -7514,7 +7525,7 @@ static int ufshcd_scsi_add_wlus(struct ufs_hba *hba)
 		scsi_device_put(sdev_boot);
 	}
 
-	if (is_embedded_dev) {
+	if((is_embedded_dev) && (0==strcmp(android_boot_dev, dev_name(hba->dev)))) {
 		sdev_rpmb = __scsi_add_device(hba->host, 0, 0,
 			ufshcd_upiu_wlun_to_scsi_wlun(UFS_UPIU_RPMB_WLUN),
 			NULL);
@@ -7814,6 +7825,12 @@ static int ufs_read_device_desc_data(struct ufs_hba *hba)
 	if (err)
 		return err;
 
+    if (0x7F != desc_buf[DEVICE_DESC_PARAM_HIGH_PR_LUN]) {
+        pro_flag = 1;
+    } else {
+        pro_flag = 0;
+    }
+	hba->dev_info.pro_flag = pro_flag;
 	/*
 	 * getting vendor (manufacturerID) and Bank Index in big endian
 	 * format
@@ -7826,6 +7843,22 @@ static int ufs_read_device_desc_data(struct ufs_hba *hba)
 	hba->dev_info.i_product_name = desc_buf[DEVICE_DESC_PARAM_PRDCT_NAME];
 
 	return 0;
+}
+
+ssize_t ufs_provision_show(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	struct ufs_hba *hba = dev_get_drvdata(dev);
+	if (hba == NULL)
+		return 0;
+	
+    return sprintf(buf, "%d\n", hba->dev_info.pro_flag);
+}
+DEVICE_ATTR_RO(ufs_provision);
+
+void ufshcd_add_sysfs_prov(struct ufs_hba *hba)
+{
+    device_create_file(hba->dev, &dev_attr_ufs_provision);
 }
 
 static void ufshcd_init_desc_sizes(struct ufs_hba *hba)
@@ -7871,6 +7904,7 @@ static void ufshcd_def_desc_sizes(struct ufs_hba *hba)
 	hba->desc_size.conf_desc = QUERY_DESC_CONFIGURATION_DEF_SIZE;
 	hba->desc_size.unit_desc = QUERY_DESC_UNIT_DEF_SIZE;
 	hba->desc_size.geom_desc = QUERY_DESC_GEOMETRY_DEF_SIZE;
+	hba->desc_size.health_desc = QUERY_DESC_HEALTH_DEF_SIZE;
 }
 
 /**
@@ -10630,6 +10664,8 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 	ufsdbg_add_debugfs(hba);
 
 	ufshcd_add_sysfs_nodes(hba);
+
+    ufshcd_add_sysfs_prov(hba);
 
 	return 0;
 

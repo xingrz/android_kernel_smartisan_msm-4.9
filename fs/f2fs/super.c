@@ -420,6 +420,9 @@ static int parse_options(struct super_block *sb, char *options)
 			break;
 		case Opt_nodiscard:
 			clear_opt(sbi, DISCARD);
+//BSP_SYS: Alex_Ma(majianbo@smatisan.com) add break for nodiscardwith Coverity tool on 2018-4-12,begin
+			break;
+//BSP_SYS: Alex_Ma(majianbo@smatisan.com) add break for nodiscardwith Coverity tool on 2018-4-12,end
 		case Opt_noheap:
 			set_opt(sbi, NOHEAP);
 			break;
@@ -578,6 +581,11 @@ static struct inode *f2fs_alloc_inode(struct super_block *sb)
 
 static int f2fs_drop_inode(struct inode *inode)
 {
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+	fsdbg_rw_info_to_fifo(inode);
+	fsdbg_write_to_file();
+#endif
+
 	/*
 	 * This is to avoid a deadlock condition like below.
 	 * writeback_single_inode(inode)

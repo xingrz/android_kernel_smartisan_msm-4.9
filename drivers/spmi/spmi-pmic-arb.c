@@ -218,7 +218,7 @@ struct pmic_arb_ver_ops {
 	u32 (*irq_clear)(u16 n);
 	u32 (*channel_map_offset)(u16 n);
 };
-
+	
 static inline void pmic_arb_base_write(struct spmi_pmic_arb *pa,
 				       u32 offset, u32 val)
 {

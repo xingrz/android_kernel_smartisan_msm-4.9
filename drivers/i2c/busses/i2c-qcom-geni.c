@@ -374,6 +374,17 @@ static void gi2c_gsi_tx_cb(void *ptr)
 {
 	struct msm_gpi_dma_async_tx_cb_param *tx_cb = ptr;
 	struct geni_i2c_dev *gi2c = tx_cb->userdata;
+	int err = 0;
+
+	if (!gi2c)
+		err = -1;
+	else if (!(gi2c->cur))
+		err = -2;
+	if (err) {
+		printk(" +++ %s() +++: error=%d\n", __func__, err);
+		dump_stack();
+		return;
+	}
 
 	if (!(gi2c->cur->flags & I2C_M_RD)) {
 		gi2c_gsi_cb_err(tx_cb, "TX");

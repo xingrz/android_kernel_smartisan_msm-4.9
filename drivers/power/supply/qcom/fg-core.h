@@ -463,6 +463,8 @@ struct fg_chip {
 	struct delayed_work	ttf_work;
 	struct delayed_work	sram_dump_work;
 	struct delayed_work	pl_enable_work;
+	struct delayed_work	update_soc_work;
+	int 			pre_msoc;
 };
 
 /* Debugfs data structures are below */

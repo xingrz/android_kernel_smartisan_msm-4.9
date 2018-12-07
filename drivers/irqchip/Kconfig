@@ -300,4 +300,9 @@ config STM32_EXTI
 	bool
 	select IRQ_DOMAIN
 
+config SHOW_IRQMASK
+	bool "select to debug the wakeup irq"
+	default n
+	 
+
 source "drivers/irqchip/qcom/Kconfig"

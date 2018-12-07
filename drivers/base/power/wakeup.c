@@ -838,13 +838,13 @@ void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
 	srcu_read_unlock(&wakeup_srcu, srcuidx);
 }
 EXPORT_SYMBOL_GPL(pm_get_active_wakeup_sources);
-
+extern void nonirq_log_wakeup_reason(char *);
 void pm_print_active_wakeup_sources(void)
 {
 	struct wakeup_source *ws;
 	int srcuidx, active = 0;
 	struct wakeup_source *last_activity_ws = NULL;
-
+	static char buf[20];
 	srcuidx = srcu_read_lock(&wakeup_srcu);
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active) {
@@ -858,9 +858,14 @@ void pm_print_active_wakeup_sources(void)
 		}
 	}
 
-	if (!active && last_activity_ws)
+	if (!active && last_activity_ws){
 		pr_info("last active wakeup source: %s\n",
 			last_activity_ws->name);
+		if(!last_activity_ws->wakeirq) {
+			snprintf(buf, 20, "%s", last_activity_ws->name);
+			nonirq_log_wakeup_reason(buf);
+		}
+	}
 	srcu_read_unlock(&wakeup_srcu, srcuidx);
 }
 EXPORT_SYMBOL_GPL(pm_print_active_wakeup_sources);
@@ -908,7 +913,7 @@ void pm_wakeup_clear(void)
 	pm_abort_suspend = false;
 	pm_wakeup_irq = 0;
 }
-
+extern void log_wakeup_reason(int);
 void pm_system_irq_wakeup(unsigned int irq_number)
 {
 	struct irq_desc *desc;
@@ -928,6 +933,7 @@ void pm_system_irq_wakeup(unsigned int irq_number)
 		}
 		pm_wakeup_irq = irq_number;
 		pm_system_wakeup();
+		log_wakeup_reason(irq_number);
 	}
 }
 

@@ -920,6 +920,42 @@ static int ufsdbg_dump_device_desc_show(struct seq_file *file, void *data)
 	return err;
 }
 
+static int ufsdbg_dump_device_health_show(struct seq_file *file, void *data)
+{
+	struct ufs_hba *hba = (struct ufs_hba *)file->private;
+	int buff_len = QUERY_DESC_HEALTH_DEF_SIZE;
+	u8 desc_buf[QUERY_DESC_HEALTH_DEF_SIZE];
+	int err = 0, i;
+	int ufs_pre_eol = 0;
+	int ufs_lifetime_est_a = 0;
+	int ufs_lifetime_est_b = 0;
+	char str_prop[128];
+
+	pm_runtime_get_sync(hba->dev);
+	err = ufshcd_read_device_health(hba, desc_buf, buff_len);
+	pm_runtime_put_sync(hba->dev);
+
+	if(err)
+	{
+		seq_printf(file, "Reading Device Health failed. err = %d\n", err);
+		return err;
+	}
+
+	ufs_pre_eol = desc_buf[DEVICE_HEALTH_PARAM_PRE_EOL];
+	ufs_lifetime_est_a = desc_buf[DEVICE_HEALTH_PARAM_LIFETIME_ESTA];
+	ufs_lifetime_est_b = desc_buf[DEVICE_HEALTH_PARAM_LIFETIME_ESTB];
+
+	pr_debug("ufs_pre_eol=%02X, ufs_lifetime_est_a=%02X, ufs_lifetime_est_b=%02X\n", ufs_pre_eol, ufs_lifetime_est_a, ufs_lifetime_est_b);
+
+	for(i=0; i<32; i++)
+	{
+		sprintf(&str_prop[i*3], "%02X ", desc_buf[DEVICE_HEALTH_PARAM_VENDOR_PROP+i]);
+	}
+
+	seq_printf(file, "EOL:%d ESTA:%d ESTB:%d\nPROP:%s\n", ufs_pre_eol, ufs_lifetime_est_a, ufs_lifetime_est_b, str_prop);
+	return 0;
+}
+
 static int ufsdbg_show_hba_show(struct seq_file *file, void *data)
 {
 	struct ufs_hba *hba = (struct ufs_hba *)file->private;
@@ -975,6 +1011,17 @@ static int ufsdbg_dump_device_desc_open(struct inode *inode, struct file *file)
 
 static const struct file_operations ufsdbg_dump_device_desc = {
 	.open		= ufsdbg_dump_device_desc_open,
+	.read		= seq_read,
+};
+
+static int ufsdbg_dump_device_health_open(struct inode *inode, struct file *file)
+{
+	return single_open(file,
+			   ufsdbg_dump_device_health_show, inode->i_private);
+}
+
+static const struct file_operations ufsdbg_dump_device_health = {
+	.open		= ufsdbg_dump_device_health_open,
 	.read		= seq_read,
 };
 
@@ -1573,6 +1620,16 @@ void ufsdbg_add_debugfs(struct ufs_hba *hba)
 	if (!hba->debugfs_files.dump_dev_desc) {
 		dev_err(hba->dev,
 			"%s:  NULL dump_device_desc file, exiting", __func__);
+		goto err;
+	}
+
+	hba->debugfs_files.dump_dev_health =
+		debugfs_create_file("dump_device_health", S_IRUSR,
+				    hba->debugfs_files.debugfs_root, hba,
+				    &ufsdbg_dump_device_health);
+	if (!hba->debugfs_files.dump_dev_health) {
+		dev_err(hba->dev,
+			"%s:  NULL dump_device_health file, exiting", __func__);
 		goto err;
 	}
 

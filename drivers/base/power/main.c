@@ -61,6 +61,7 @@ static DEFINE_MUTEX(dpm_list_mtx);
 static pm_message_t pm_transition;
 
 static int async_error;
+static int is_suspend = 0;    /*   0: not on suspend    1: on suspend */
 
 static char *pm_verb(int event)
 {
@@ -128,9 +129,9 @@ void device_pm_add(struct device *dev)
 		 dev->bus ? dev->bus->name : "No Bus", dev_name(dev));
 	device_pm_check_callbacks(dev);
 	mutex_lock(&dpm_list_mtx);
-	if (dev->parent && dev->parent->power.is_prepared)
+/*	if (dev->parent && dev->parent->power.is_prepared)
 		dev_warn(dev, "parent %s should not be sleeping\n",
-			dev_name(dev->parent));
+			dev_name(dev->parent));*/
 	list_add_tail(&dev->power.entry, &dpm_list);
 	mutex_unlock(&dpm_list_mtx);
 }
@@ -709,6 +710,7 @@ void dpm_resume_early(pm_message_t state)
 		mutex_lock(&dpm_list_mtx);
 		put_device(dev);
 	}
+	set_suspend_state(0);
 	mutex_unlock(&dpm_list_mtx);
 	async_synchronize_full();
 	dpm_show_time(starttime, state, "early");
@@ -1156,6 +1158,18 @@ int dpm_suspend_noirq(pm_message_t state)
 	return error;
 }
 
+void set_suspend_state(int state){
+	is_suspend = state;
+	printk("%s is_suspend=%d\n",__func__,is_suspend);
+}
+EXPORT_SYMBOL_GPL(set_suspend_state);
+int get_suspend_state()
+{
+	printk("%s is_suspend=%d\n",__func__,is_suspend);
+	return is_suspend;
+}
+EXPORT_SYMBOL_GPL(get_suspend_state);
+
 /**
  * device_suspend_late - Execute a "late suspend" callback for given device.
  * @dev: Device to handle.
@@ -1258,6 +1272,8 @@ int dpm_suspend_late(pm_message_t state)
 	mutex_lock(&dpm_list_mtx);
 	pm_transition = state;
 	async_error = 0;
+
+	set_suspend_state(1);
 
 	while (!list_empty(&dpm_suspended_list)) {
 		struct device *dev = to_device(dpm_suspended_list.prev);
