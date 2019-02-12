@@ -44,6 +44,8 @@ enum {
 	RTR_DBG = 1U << 1,
 };
 
+int msm_ipc_router_wakeup_debug_mask = 0;
+
 static int msm_ipc_router_debug_mask;
 module_param_named(debug_mask, msm_ipc_router_debug_mask,
 		   int, 0664);
@@ -405,6 +407,23 @@ static void ipc_router_log_msg(void *log_ctx, u32 xchng_type,
 			svc_id, svc_ins, hdr->src_node_id, hdr->src_port_id,
 			hdr->dst_node_id, hdr->dst_port_id,
 			(unsigned int)pl_buf, (unsigned int)(pl_buf >> 32));
+		if(msm_ipc_router_wakeup_debug_mask){
+			printk("[IPCRTR] %s %s %s Len:0x%x T:0x%x CF:0x%x SVC:<0x%x:0x%x> SRC:<0x%x:0x%x> DST:<0x%x:0x%x> DATA: %08x %08x",
+				(xchng_type == IPC_ROUTER_LOG_EVENT_RX ? "" :
+				(xchng_type == IPC_ROUTER_LOG_EVENT_TX ?
+				current->comm : "")),
+				(port_type == CLIENT_PORT ? "CLI" : "SRV"),
+				(xchng_type == IPC_ROUTER_LOG_EVENT_RX ? "RX" :
+				(xchng_type == IPC_ROUTER_LOG_EVENT_TX ? "TX" :
+				(xchng_type == IPC_ROUTER_LOG_EVENT_TX_ERR ? "TX_ERR" :
+				(xchng_type == IPC_ROUTER_LOG_EVENT_RX_ERR ? "RX_ERR" :
+				"UNKNOWN")))),
+				hdr->size, hdr->type, hdr->control_flag,
+				svc_id, svc_ins, hdr->src_node_id, hdr->src_port_id,
+				hdr->dst_node_id, hdr->dst_port_id,
+				(unsigned int)pl_buf, (unsigned int)(pl_buf >> 32));
+			msm_ipc_router_wakeup_debug_mask = 0;
+		}
 
 	} else {
 		msg = (union rr_control_msg *)data;

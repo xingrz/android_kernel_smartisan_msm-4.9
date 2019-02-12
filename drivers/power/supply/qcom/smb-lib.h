@@ -267,6 +267,7 @@ struct smb_charger {
 
 	/* notifiers */
 	struct notifier_block	nb;
+	struct notifier_block	dsi_panel_notifier;
 
 	/* parallel charging */
 	struct parallel_params	pl;
@@ -297,6 +298,7 @@ struct smb_charger {
 	struct votable		*disable_power_role_switch;
 
 	/* work */
+	struct work_struct	panel_status_work;
 	struct work_struct	bms_update_work;
 	struct work_struct	pl_update_work;
 	struct work_struct	rdstd_cc2_detach_work;
@@ -321,6 +323,9 @@ struct smb_charger {
 	int			system_temp_level;
 	int			thermal_levels;
 	int			*thermal_mitigation;
+	int			thermal_levels_panel_on;
+	int			*thermal_mitigation_panel_on;
+	bool 			panel_on;
 	int			dcp_icl_ua;
 	int			fake_capacity;
 	int			fake_batt_status;
@@ -405,6 +410,7 @@ int smblib_vconn_regulator_disable(struct regulator_dev *rdev);
 int smblib_vconn_regulator_is_enabled(struct regulator_dev *rdev);
 
 irqreturn_t smblib_handle_debug(int irq, void *data);
+irqreturn_t smblib_handle_aicl_fail(int irq, void *data);
 irqreturn_t smblib_handle_otg_overcurrent(int irq, void *data);
 irqreturn_t smblib_handle_chg_state_change(int irq, void *data);
 irqreturn_t smblib_handle_batt_temp_changed(int irq, void *data);

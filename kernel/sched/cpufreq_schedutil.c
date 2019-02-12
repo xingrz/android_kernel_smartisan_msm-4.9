@@ -24,7 +24,6 @@ unsigned long boosted_cpu_util(int cpu);
 #endif
 
 #define SUGOV_KTHREAD_PRIORITY	50
-
 struct sugov_tunables {
 	struct gov_attr_set attr_set;
 	unsigned int rate_limit_us;
@@ -611,7 +610,6 @@ static struct governor_attr rate_limit_us = __ATTR_RW(rate_limit_us);
 static struct governor_attr hispeed_load = __ATTR_RW(hispeed_load);
 static struct governor_attr hispeed_freq = __ATTR_RW(hispeed_freq);
 static struct governor_attr pl = __ATTR_RW(pl);
-
 static struct attribute *sugov_attributes[] = {
 	&rate_limit_us.attr,
 	&hispeed_load.attr,

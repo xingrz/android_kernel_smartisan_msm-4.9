@@ -246,6 +246,7 @@ void panic(const char *fmt, ...)
 	 */
 	debug_locks_off();
 	console_flush_on_panic();
+	log_buf_flush_dcache();
 
 	if (!panic_blink)
 		panic_blink = no_blink;

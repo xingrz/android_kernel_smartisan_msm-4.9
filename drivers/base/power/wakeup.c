@@ -19,6 +19,7 @@
 #include <trace/events/power.h>
 #include <linux/irq.h>
 #include <linux/irqdesc.h>
+#include <linux/wakeup_reason.h>
 
 #include "power.h"
 
@@ -575,7 +576,9 @@ void __pm_stay_awake(struct wakeup_source *ws)
 
 	if (!ws)
 		return;
-
+	if(strstr(ws->name,"hvdcp_opti")){
+		return;
+	}
 	spin_lock_irqsave(&ws->lock, flags);
 
 	wakeup_source_report_event(ws);
@@ -839,17 +842,20 @@ void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
 }
 EXPORT_SYMBOL_GPL(pm_get_active_wakeup_sources);
 
+extern void log_unexcept_ws_reason(char* name);
 void pm_print_active_wakeup_sources(void)
 {
 	struct wakeup_source *ws;
 	int srcuidx, active = 0;
 	struct wakeup_source *last_activity_ws = NULL;
-
+	static char buf[MAX_SUSPEND_ABORT_LEN];
 	srcuidx = srcu_read_lock(&wakeup_srcu);
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active) {
 			pr_info("active wakeup source: %s\n", ws->name);
 			active = 1;
+			snprintf(buf, MAX_SUSPEND_ABORT_LEN, "%s", ws->name);
+			log_unexcept_ws_reason(buf);
 		} else if (!active &&
 			   (!last_activity_ws ||
 			    ktime_to_ns(ws->last_time) >
@@ -858,9 +864,12 @@ void pm_print_active_wakeup_sources(void)
 		}
 	}
 
-	if (!active && last_activity_ws)
+	if (!active && last_activity_ws) {
 		pr_info("last active wakeup source: %s\n",
 			last_activity_ws->name);
+		snprintf(buf, MAX_SUSPEND_ABORT_LEN, "%s", last_activity_ws->name);
+		log_unexcept_ws_reason(buf);
+	}
 	srcu_read_unlock(&wakeup_srcu, srcuidx);
 }
 EXPORT_SYMBOL_GPL(pm_print_active_wakeup_sources);
@@ -908,7 +917,7 @@ void pm_wakeup_clear(void)
 	pm_abort_suspend = false;
 	pm_wakeup_irq = 0;
 }
-
+extern void log_wakeup_reason(int);
 void pm_system_irq_wakeup(unsigned int irq_number)
 {
 	struct irq_desc *desc;
@@ -928,6 +937,7 @@ void pm_system_irq_wakeup(unsigned int irq_number)
 		}
 		pm_wakeup_irq = irq_number;
 		pm_system_wakeup();
+		log_wakeup_reason(irq_number);
 	}
 }
 

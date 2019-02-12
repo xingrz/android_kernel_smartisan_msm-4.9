@@ -22,7 +22,7 @@
 #include <linux/of.h>
 #include <linux/err.h>
 #include <linux/uaccess.h>
-
+#define DEBUG
 #include <soc/qcom/subsystem_restart.h>
 #include <soc/qcom/subsystem_notif.h>
 #include <soc/qcom/sysmon.h>
@@ -394,10 +394,12 @@ static void root_service_service_arrive(struct work_struct *work)
 			enum pd_subsys_state state = ROOT_PD_UP;
 			rc = register_notif_listener(service_notif, data,
 								&curr_state);
+			pr_err("curr_state: 0x%08X for %d service\n", curr_state, data->instance_id);
 			if (rc) {
 				pr_err("Notifier registration failed for %s rc:%d\n",
 					service_notif->service_path, rc);
 			} else {
+				pr_err("Notifying curr_state: 0x%08X for %d service\n", curr_state, data->instance_id);
 				rc = service_notif_queue_notification(
 					service_notif, curr_state, &state);
 				if (rc & NOTIFY_STOP_MASK)
@@ -548,6 +550,8 @@ static void *add_service_notif(const char *service_path, int instance_id,
 				service_notif->curr_state = *curr_state;
 			}
 			mutex_unlock(&qmi_list_lock);
+
+			pr_err("<debug> add_service_notif: already have a connection!");
 			goto add_service_list;
 		}
 	}
@@ -579,6 +583,7 @@ static void *add_service_notif(const char *service_path, int instance_id,
 	*curr_state = service_notif->curr_state =
 				SERVREG_NOTIF_SERVICE_STATE_UNINIT_V01;
 
+    pr_err("<debug> add_service_notif: new connection! curr_state init to 0x7FFFFFFF");
 	rc = qmi_svc_event_notifier_register(SERVREG_NOTIF_SERVICE_ID,
 			SERVREG_NOTIF_SERVICE_VERS, qmi_data->instance_id,
 			&qmi_data->notifier);
@@ -712,6 +717,8 @@ void *service_notif_register_notifier(const char *service_path, int instance_id,
 	if (!service_path || !instance_id || !nb)
 		return ERR_PTR(-EINVAL);
 
+	pr_err("<debug> service_notif_register_notifier:curr_state = 0x%X", *curr_state);
+    pr_err("<debug> path=%s func=%pf\n",service_path,nb->notifier_call);
 	mutex_lock(&notif_add_lock);
 	service_notif = _find_service_info(service_path);
 	if (!service_notif) {
@@ -723,9 +730,11 @@ void *service_notif_register_notifier(const char *service_path, int instance_id,
 			goto exit;
 	}
 
+	pr_err("<debug> service_notif_register_notifier: curr_state = 0x%X, service_notif->curr_state = 0x%X", *curr_state, service_notif->curr_state);
 	ret = srcu_notifier_chain_register(
 				&service_notif->service_notif_rcvr_list, nb);
 	*curr_state = service_notif->curr_state;
+	pr_err("<debug> func=%pf registered state=0x%X",nb->notifier_call,*curr_state);
 	if (ret < 0)
 		service_notif = ERR_PTR(ret);
 exit:

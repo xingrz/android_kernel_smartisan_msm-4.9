@@ -71,6 +71,10 @@ static int cpu_to_affin;
 module_param(cpu_to_affin, int, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(cpu_to_affin, "affin usb irq to this cpu");
 
+static int ssphy_type_dp_only;
+module_param(ssphy_type_dp_only, int, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(ssphy_type_dp_only, "SSPHY SUPPORT DP ONLY");
+
 /* XHCI registers */
 #define USB3_HCSPARAMS1		(0x4)
 #define USB3_PORTSC		(0x420)
@@ -2255,7 +2259,7 @@ static int dwc3_msm_suspend(struct dwc3_msm *mdwc)
 	usb_phy_set_suspend(mdwc->hs_phy, 1);
 
 	/* Suspend SS PHY */
-	if (dwc->maximum_speed == USB_SPEED_SUPER) {
+	if (dwc->maximum_speed == USB_SPEED_SUPER || ssphy_type_dp_only) {
 		/* indicate phy about SS mode */
 		if (dwc3_msm_is_superspeed(mdwc))
 			mdwc->ss_phy->flags |= DEVICE_IN_SS_MODE;
@@ -2360,6 +2364,11 @@ static int dwc3_msm_resume(struct dwc3_msm *mdwc)
 	struct usb_irq *uirq;
 
 	dev_dbg(mdwc->dev, "%s: exiting lpm\n", __func__);
+
+	if (ssphy_type_dp_only == 1)
+		mdwc->ss_phy->type = USB_PHY_TYPE_DP;
+	else
+		mdwc->ss_phy->type = USB_PHY_TYPE_USB3_AND_DP;
 
 	mutex_lock(&mdwc->suspend_resume_mutex);
 	if (!atomic_read(&dwc->in_lpm)) {
@@ -3570,6 +3579,8 @@ static int dwc3_msm_probe(struct platform_device *pdev)
 		dwc3_ext_event_notify(mdwc);
 	}
 
+	ssphy_type_dp_only = 1;
+
 	return 0;
 
 put_psy:
@@ -4094,7 +4105,7 @@ static int dwc3_msm_gadget_vbus_draw(struct dwc3_msm *mdwc, unsigned int mA)
 	psy_type = get_psy_type(mdwc);
 	if (psy_type == POWER_SUPPLY_TYPE_USB_FLOAT) {
 		if (!mA)
-			pval.intval = -ETIMEDOUT;
+			pval.intval = 1000000;
 		else
 			pval.intval = 1000 * mA;
 		goto set_prop;

@@ -41,4 +41,11 @@ config DIAG_USES_SMD
 	  Diag over SMD enables exchanging diagnostic information between
 	  application processor and peripherals over SDM.
 
+config DIAG_CERTIFY
+	bool "Enable DIAG certify function"
+        depends on DIAG_CHAR
+	default n
+	help
+	 This feature helps segregate code required for DIAG certify.
+
 endmenu

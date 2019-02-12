@@ -1263,18 +1263,24 @@ static int reverse_path_check(void)
 
 static int ep_create_wakeup_source(struct epitem *epi)
 {
-	const char *name;
+//	const char *name;
+	char *event_name;
+	char *ws_name;
 	struct wakeup_source *ws;
 
 	if (!epi->ep->ws) {
-		epi->ep->ws = wakeup_source_register("eventpoll");
+//		epi->ep->ws = wakeup_source_register("eventpoll");
+		event_name=kasprintf(GFP_KERNEL,"EP-eventpoll-%s",current->comm);
+		epi->ep->ws = wakeup_source_register(event_name);
+		kfree(event_name);
 		if (!epi->ep->ws)
 			return -ENOMEM;
 	}
 
-	name = epi->ffd.file->f_path.dentry->d_name.name;
-	ws = wakeup_source_register(name);
-
+//	name = epi->ffd.file->f_path.dentry->d_name.name;
+	ws_name = kasprintf(GFP_KERNEL,"EP-%s-%s",epi->ffd.file->f_path.dentry->d_name.name,current->comm);
+	ws = wakeup_source_register(ws_name);
+	kfree(ws_name);
 	if (!ws)
 		return -ENOMEM;
 	rcu_assign_pointer(epi->ws, ws);
@@ -1315,7 +1321,6 @@ static int ep_insert(struct eventpoll *ep, struct epoll_event *event,
 		return -ENOSPC;
 	if (!(epi = kmem_cache_alloc(epi_cache, GFP_KERNEL)))
 		return -ENOMEM;
-
 	/* Item initialization follow here ... */
 	INIT_LIST_HEAD(&epi->rdllink);
 	INIT_LIST_HEAD(&epi->fllink);

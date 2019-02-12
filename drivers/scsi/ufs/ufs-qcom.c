@@ -33,6 +33,7 @@
 #include "ufs-qcom-ice.h"
 #include "ufs-qcom-debugfs.h"
 #include <linux/clk/qcom.h>
+#include <smartisan/hwinfo.h>
 
 #define MAX_PROP_SIZE		   32
 #define VDDP_REF_CLK_MIN_UV        1200000
@@ -1994,8 +1995,7 @@ static void ufs_qcom_pm_qos_remove(struct ufs_qcom_host *host)
 }
 #endif /* CONFIG_SMP */
 
-#define	ANDROID_BOOT_DEV_MAX	30
-static char android_boot_dev[ANDROID_BOOT_DEV_MAX];
+char android_boot_dev[ANDROID_BOOT_DEV_MAX];
 
 #ifndef MODULE
 static int __init get_android_boot_dev(char *str)
@@ -2705,6 +2705,7 @@ static int ufs_qcom_probe(struct platform_device *pdev)
 {
 	int err;
 	struct device *dev = &pdev->dev;
+#if 0
 	struct device_node *np = dev->of_node;
 
 	/*
@@ -2723,6 +2724,12 @@ static int ufs_qcom_probe(struct platform_device *pdev)
 	    strlen(android_boot_dev) &&
 	    strcmp(android_boot_dev, dev_name(dev)))
 		return -ENODEV;
+#endif
+
+	if (get_ufs2_support() == 0) {
+		dev_err(dev, "ufshcd_pltfrm_init() no ufs\n");
+		return -ENODEV;
+	}
 
 	/* Perform generic probe */
 	err = ufshcd_pltfrm_init(pdev, &ufs_hba_qcom_variant);

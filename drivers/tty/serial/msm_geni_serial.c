@@ -776,6 +776,37 @@ static void msm_geni_serial_console_write(struct console *co, const char *s,
 	}
 }
 
+#if defined(SUPPORT_SYSRQ)
+
+#define SRQ_FILTER_MAX          (4)
+#define SRQ_FILTER_STR          "srqX"
+
+static unsigned int  filter_cnt = 0;
+static unsigned char filter[SRQ_FILTER_MAX];
+
+static int check_sysrq_filter(unsigned char ch)
+{
+    if ('\0' == ch) {
+        filter_cnt = 0;
+        return 0;
+    }
+
+    if (filter_cnt < SRQ_FILTER_MAX) {
+        filter[filter_cnt] = ch;
+        filter_cnt++;
+    }
+
+    if (filter_cnt == SRQ_FILTER_MAX) {
+        if (0 == strncmp(filter, SRQ_FILTER_STR, SRQ_FILTER_MAX-1))
+            return 1;
+        else
+            return 2;
+    }
+
+    return 0;
+}
+#endif /* SUPPORT_SYSRQ */
+
 static int handle_rx_console(struct uart_port *uport,
 			unsigned int rx_fifo_wc,
 			unsigned int rx_last_byte_valid,
@@ -803,10 +834,28 @@ static int handle_rx_console(struct uart_port *uport,
 		}
 		for (c = 0; c < bytes; c++) {
 			char flag = TTY_NORMAL;
-			int sysrq;
+			int sysrq = 0;
 
 			uport->icount.rx++;
-			sysrq = uart_handle_sysrq_char(uport, rx_char[c]);
+
+#if defined(SUPPORT_SYSRQ)
+            if (uport->sysrq != 0) {
+                int keyrq = check_sysrq_filter(rx_char[c]);
+
+                sysrq = 1;
+                if (time_before(jiffies, uport->sysrq)) {
+                    if (1 == keyrq) {
+                        spin_unlock(&uport->lock);
+                        sysrq = uart_handle_sysrq_char(uport, rx_char[c]);
+                        spin_lock(&uport->lock);
+                    }
+                } else {
+                    uport->sysrq = 0;
+                    sysrq = 0;
+                }
+            }
+#endif
+
 			if (!sysrq)
 				tty_insert_flip_char(tport, rx_char[c], flag);
 		}
@@ -1035,7 +1084,7 @@ static void start_rx_sequencer(struct uart_port *uport)
 		geni_m_irq_en = geni_read_reg_nolog(uport->membase,
 							SE_GENI_M_IRQ_EN);
 
-		geni_s_irq_en |= S_RX_FIFO_WATERMARK_EN | S_RX_FIFO_LAST_EN;
+		geni_s_irq_en |= S_RX_FIFO_WATERMARK_EN | S_RX_FIFO_LAST_EN | S_GP_IRQ_2_EN;
 		geni_m_irq_en |= M_RX_FIFO_WATERMARK_EN | M_RX_FIFO_LAST_EN;
 
 		geni_write_reg_nolog(geni_s_irq_en, uport->membase,
@@ -1110,7 +1159,7 @@ static void stop_rx_sequencer(struct uart_port *uport)
 							SE_GENI_S_IRQ_EN);
 		geni_m_irq_en = geni_read_reg_nolog(uport->membase,
 							SE_GENI_M_IRQ_EN);
-		geni_s_irq_en &= ~(S_RX_FIFO_WATERMARK_EN | S_RX_FIFO_LAST_EN);
+		geni_s_irq_en &= ~(S_RX_FIFO_WATERMARK_EN | S_RX_FIFO_LAST_EN | S_GP_IRQ_2_EN);
 		geni_m_irq_en &= ~(M_RX_FIFO_WATERMARK_EN | M_RX_FIFO_LAST_EN);
 
 		geni_write_reg_nolog(geni_s_irq_en, uport->membase,
@@ -1462,6 +1511,10 @@ static irqreturn_t msm_geni_serial_isr(int isr, void *dev)
 		} else if ((s_irq_status & S_GP_IRQ_2_EN) ||
 			(s_irq_status & S_GP_IRQ_3_EN)) {
 			uport->icount.brk++;
+#if defined(CONFIG_SERIAL_CORE_CONSOLE) || defined(SUPPORT_SYSRQ)
+			uport->sysrq = 0;
+			uart_handle_break(uport);
+#endif
 			IPC_LOG_MSG(msm_port->ipc_log_misc,
 				"%s.sirq 0x%x break:%d\n",
 				__func__, s_irq_status, uport->icount.brk);
@@ -2344,6 +2397,9 @@ static const struct of_device_id msm_geni_device_tbl[] = {
 	{},
 };
 
+#ifdef CONFIG_SERIAL_CORE_CONSOLE
+extern int do_skip_serial;
+#endif
 static int msm_geni_serial_probe(struct platform_device *pdev)
 {
 	int ret = 0;
@@ -2366,6 +2422,14 @@ static int msm_geni_serial_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "%s: No matching device found", __func__);
 		return -ENODEV;
 	}
+
+#ifdef CONFIG_SERIAL_CORE_CONSOLE
+	dev_err(&pdev->dev, "%s: do_skip_serial = %d\n", __func__, do_skip_serial);
+	printk("%s:albert: do_skip_serial = %d\n", __func__, do_skip_serial);
+	if((!strcmp(id->compatible,"qcom,msm-geni-console")) && do_skip_serial){
+		return -ENODEV;
+	}
+#endif
 
 	if (pdev->dev.of_node) {
 		if (drv->cons)

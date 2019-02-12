@@ -35,6 +35,22 @@
 #define DSI_CMD_PPS_SIZE 135
 
 #define DSI_MODE_MAX 5
+//0249208 bsp madan@smartisan.com add to support eye protect mode begin.
+#define COOL_PARAM_1 13
+#define COOL_PARAM_2 19
+#define WARM_PARAM_1 19
+#define WARM_PARAM_2 25
+#define COOL_LEVEL_1 13
+#define WARM_LEVEL_1 10
+#define COOL_DELTA_1 1
+#define COOL_DELTA_2 1
+#define COOL_DELTA_3 2
+#define WARM_DELTA_1 3
+#define WARM_DELTA_2 7
+#define WARM_DELTA_3 8
+#define TOTAL_LEVEL 20
+#define COLOR_DATA_MAX 19
+//0249208 bsp madan@smartisan.com add to support eye protect mode end.
 
 enum dsi_panel_rotation {
 	DSI_PANEL_ROTATE_NONE = 0,
@@ -154,6 +170,7 @@ struct dsi_panel {
 	struct mipi_dsi_device mipi_device;
 
 	struct mutex panel_lock;
+	struct mutex transfer_mutex;
 	struct drm_panel drm_panel;
 	struct mipi_dsi_host *host;
 	struct device *parent;
@@ -180,6 +197,7 @@ struct dsi_panel {
 	bool ulps_enabled;
 	bool ulps_suspend_enabled;
 	bool allow_phy_power_off;
+	int panel_power_state;
 
 	bool panel_initialized;
 	bool te_using_watchdog_timer;
@@ -189,6 +207,13 @@ struct dsi_panel {
 
 	bool sync_broadcast_en;
 };
+//#0261410 lishaokai_ext@smartisan.com 20180530 begin
+#define DSIPANEL_IOCTL_MAGIC 'j'
+#define DSI_PANEL_WARM_PP _IOWR(DSIPANEL_IOCTL_MAGIC, 0x41, int)
+#define DSI_PANEL_COLD_PP _IOWR(DSIPANEL_IOCTL_MAGIC, 0x42, int)
+#define DSI_PANEL_RESET_PP _IOWR(DSIPANEL_IOCTL_MAGIC, 0x43, int)
+#define SMARTISAN_IE_SET _IOWR(DSIPANEL_IOCTL_MAGIC, 0x44, int)
+//#0261410 lishaokai_ext@smartisan.com 20180530 end
 
 static inline bool dsi_panel_ulps_feature_enabled(struct dsi_panel *panel)
 {

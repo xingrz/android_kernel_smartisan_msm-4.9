@@ -41,9 +41,8 @@
 #include <linux/usb/composite.h>
 
 #include "configfs.h"
-
-#define MTP_RX_BUFFER_INIT_SIZE    1048576
-#define MTP_TX_BUFFER_INIT_SIZE    1048576
+#define MTP_RX_BUFFER_INIT_SIZE    1572864
+#define MTP_TX_BUFFER_INIT_SIZE    1572864
 #define MTP_BULK_BUFFER_SIZE       16384
 #define INTR_BUFFER_SIZE           28
 #define MAX_INST_NAME_LEN          40
@@ -129,6 +128,7 @@ struct mtp_dev {
 	uint16_t xfer_command;
 	uint32_t xfer_transaction_id;
 	int xfer_result;
+#ifdef  CONFIG_MTP_STATS_DEBUG
 	struct {
 		unsigned long vfs_rbytes;
 		unsigned long vfs_wbytes;
@@ -137,6 +137,7 @@ struct mtp_dev {
 	} perf[MAX_ITERATION];
 	unsigned int dbg_read_index;
 	unsigned int dbg_write_index;
+#endif
 	struct mutex  read_mutex;
 };
 
@@ -809,7 +810,9 @@ static void send_file_work(struct work_struct *data)
 	int xfer, ret, hdr_size;
 	int r = 0;
 	int sendZLP = 0;
+#ifdef  CONFIG_MTP_STATS_DEBUG
 	ktime_t start_time;
+#endif
 
 	/* read our parameters */
 	smp_rmb();
@@ -873,7 +876,9 @@ static void send_file_work(struct work_struct *data)
 			header->transaction_id =
 					__cpu_to_le32(dev->xfer_transaction_id);
 		}
+#ifdef  CONFIG_MTP_STATS_DEBUG
 		start_time = ktime_get();
+#endif
 		ret = vfs_read(filp, req->buf + hdr_size, xfer - hdr_size,
 								&offset);
 		if (ret < 0) {
@@ -882,10 +887,12 @@ static void send_file_work(struct work_struct *data)
 		}
 
 		xfer = ret + hdr_size;
+#ifdef  CONFIG_MTP_STATS_DEBUG
 		dev->perf[dev->dbg_read_index].vfs_rtime =
 			ktime_to_us(ktime_sub(ktime_get(), start_time));
 		dev->perf[dev->dbg_read_index].vfs_rbytes = xfer;
 		dev->dbg_read_index = (dev->dbg_read_index + 1) % MAX_ITERATION;
+#endif
 		hdr_size = 0;
 
 		req->length = xfer;
@@ -925,7 +932,9 @@ static void receive_file_work(struct work_struct *data)
 	int64_t count;
 	int ret, cur_buf = 0;
 	int r = 0;
+#ifdef  CONFIG_MTP_STATS_DEBUG
 	ktime_t start_time;
+#endif
 
 	/* read our parameters */
 	smp_rmb();
@@ -966,7 +975,9 @@ static void receive_file_work(struct work_struct *data)
 
 		if (write_req) {
 			DBG(cdev, "rx %pK %d\n", write_req, write_req->actual);
+#ifdef  CONFIG_MTP_STATS_DEBUG
 			start_time = ktime_get();
+#endif
 			mutex_lock(&dev->read_mutex);
 			if (dev->state == STATE_OFFLINE) {
 				r = -EIO;
@@ -984,11 +995,13 @@ static void receive_file_work(struct work_struct *data)
 				break;
 			}
 			mutex_unlock(&dev->read_mutex);
+#ifdef  CONFIG_MTP_STATS_DEBUG
 			dev->perf[dev->dbg_write_index].vfs_wtime =
 				ktime_to_us(ktime_sub(ktime_get(), start_time));
 			dev->perf[dev->dbg_write_index].vfs_wbytes = ret;
 			dev->dbg_write_index =
 				(dev->dbg_write_index + 1) % MAX_ITERATION;
+#endif
 			write_req = NULL;
 		}
 
@@ -1571,6 +1584,7 @@ static void mtp_function_disable(struct usb_function *f)
 	VDBG(cdev, "%s disabled\n", dev->function.name);
 }
 
+#ifdef  CONFIG_MTP_STATS_DEBUG
 static int debug_mtp_read_stats(struct seq_file *s, void *unused)
 {
 	struct mtp_dev *dev = _mtp_dev;
@@ -1661,16 +1675,19 @@ static const struct file_operations debug_mtp_ops = {
 	.read = seq_read,
 	.write = debug_mtp_reset_stats,
 };
+#endif
 
 struct dentry *dent_mtp;
 static void mtp_debugfs_init(void)
 {
+#ifdef  CONFIG_MTP_STATS_DEBUG
 	struct dentry *dent_mtp_status;
-
+#endif
 	dent_mtp = debugfs_create_dir("usb_mtp", 0);
 	if (!dent_mtp || IS_ERR(dent_mtp))
 		return;
-
+	
+#ifdef  CONFIG_MTP_STATS_DEBUG
 	dent_mtp_status = debugfs_create_file("status", 0644, dent_mtp,
 						0, &debug_mtp_ops);
 	if (!dent_mtp_status || IS_ERR(dent_mtp_status)) {
@@ -1678,6 +1695,7 @@ static void mtp_debugfs_init(void)
 		dent_mtp = NULL;
 		return;
 	}
+#endif
 }
 
 static void mtp_debugfs_remove(void)

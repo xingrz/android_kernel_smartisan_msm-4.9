@@ -128,7 +128,14 @@ static int dsi_bridge_attach(struct drm_bridge *bridge)
 	return 0;
 
 }
-
+//#0254768 lishaokai_ext@smartisan.com begin
+extern void dsi_panel_set_ie_level(u32 ie_level);
+extern u32 is_eye_care_mode;
+extern u32 is_CGM_enable;
+//#0254768 lishaokai_ext@smartisan.com end
+//#0257789 lishaokai_ext@smartisan.com begin
+extern u32 is_color_mode;
+//#0257789lishaokai_ext@smartisan.com end
 static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 {
 	int rc = 0;
@@ -175,6 +182,18 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 	}
 	SDE_ATRACE_END("dsi_display_enable");
 	SDE_ATRACE_END("dsi_bridge_pre_enable");
+//#0257789 lishaokai_ext@smartisan.com begin
+	if(is_color_mode == 1)
+		dsi_panel_set_ie_level(180);
+//#0257789lishaokai_ext@smartisan.com end
+//#0254768 lishaokai_ext@smartisan.com begin
+	if(is_eye_care_mode == 1)
+		dsi_panel_set_ie_level(10);
+//#0254768 lishaokai_ext@smartisan.com end
+	if(is_CGM_enable == 1)
+		dsi_panel_set_ie_level(201);
+	else if (is_CGM_enable == 2)
+		dsi_panel_set_ie_level(202);
 
 	rc = dsi_display_splash_res_cleanup(c_bridge->display);
 	if (rc)

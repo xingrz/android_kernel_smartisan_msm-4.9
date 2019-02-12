@@ -756,6 +756,11 @@ static struct inode *f2fs_alloc_inode(struct super_block *sb)
 static int f2fs_drop_inode(struct inode *inode)
 {
 	int ret;
+#ifdef CONFIG_FILESYSTEM_STATISTICS
+	fsdbg_rw_info_to_fifo(inode);
+	fsdbg_write_to_file();
+#endif
+
 	/*
 	 * This is to avoid a deadlock condition like below.
 	 * writeback_single_inode(inode)

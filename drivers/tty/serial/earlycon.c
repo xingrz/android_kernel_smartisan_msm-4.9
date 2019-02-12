@@ -182,7 +182,7 @@ int __init setup_earlycon(char *buf)
 
 	for (match = __earlycon_table; match < __earlycon_table_end; match++) {
 		size_t len = strlen(match->name);
-
+		
 		if (strncmp(buf, match->name, len))
 			continue;
 
@@ -206,12 +206,25 @@ int __init setup_earlycon(char *buf)
  * call parse_spcr(), else call early_init_dt_scan_chosen_stdout()
  */
 bool earlycon_init_is_deferred __initdata;
+#ifdef CONFIG_SERIAL_CORE_CONSOLE
+int do_skip_serial = 0;
+#endif
 
 /* early_param wrapper for setup_earlycon() */
 static int __init param_setup_earlycon(char *buf)
 {
 	int err;
 
+#ifdef CONFIG_SERIAL_CORE_CONSOLE
+	pr_err("%s: serial console/earlycon %s\n", __func__, buf);
+	if(*buf) {
+		if(!strcmp("off", buf)){
+			do_skip_serial = 1;
+			pr_err("%s: do_skip_serial = %d\n", __func__, do_skip_serial);
+			return 0;
+		}
+	}
+#endif	
 	/*
 	 * Just 'earlycon' is a valid param for devicetree earlycons;
 	 * don't generate a warning from parse_early_params() in that case

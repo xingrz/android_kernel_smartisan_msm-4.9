@@ -51,6 +51,7 @@
 #include <soc/qcom/ramdump.h>
 
 #include "wlan_firmware_service_v01.h"
+#undef SM_QCOM_VBATT_ENABLE
 
 #ifdef CONFIG_ICNSS_DEBUG
 unsigned long qmi_timeout = 10000;
@@ -687,6 +688,7 @@ out:
 	return ret;
 }
 
+#ifdef  SM_QCOM_VBATT_ENABLE
 static int wlfw_vbatt_send_sync_msg(struct icnss_priv *priv,
 				    uint64_t voltage_uv)
 {
@@ -851,11 +853,14 @@ static int icnss_setup_vph_monitor(struct icnss_priv *priv)
 out:
 	return ret;
 }
+#endif
 
 static int icnss_init_vph_monitor(struct icnss_priv *priv)
 {
+#ifdef  SM_QCOM_VBATT_ENABLE
 	int ret = 0;
 
+         icnss_pr_err("%s: \n",__func__ );
 	if (test_bit(VBATT_DISABLE, &quirks))
 		goto out;
 
@@ -870,6 +875,10 @@ static int icnss_init_vph_monitor(struct icnss_priv *priv)
 		goto out;
 out:
 	return ret;
+#else
+         icnss_pr_err("%s: VBATT_DISABLE\n",__func__ );
+         return 0;
+#endif
 }
 
 

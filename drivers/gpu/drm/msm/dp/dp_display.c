@@ -1384,6 +1384,35 @@ static int dp_display_create_workqueue(struct dp_display_private *dp)
 	return 0;
 }
 
+static ssize_t link_training_show(struct device *dev,
+                struct device_attribute *attr, char *buf)
+{
+	int len = 0;
+	struct dp_display_private *dp = dev_get_drvdata(dev);
+	if (dp)
+		len = snprintf(buf, SZ_8, "%d\n", dp->link->link_training);
+	return len;
+}
+
+static ssize_t connected_show(struct device *dev,
+                struct device_attribute *attr, char *buf)
+{
+	int len = 0;
+	struct dp_display_private *dp = dev_get_drvdata(dev);
+	if (dp)
+		len = snprintf(buf, SZ_8, "%d\n", dp->usbpd->hpd_high);
+	return len;
+}
+
+static DEVICE_ATTR(link_training, 0444, link_training_show, NULL);
+static DEVICE_ATTR(connected, 0444, connected_show, NULL);
+
+static const struct attribute *usb_dp_attrs[] = {
+	&dev_attr_link_training.attr,
+	&dev_attr_connected.attr,
+	NULL,
+};
+
 static int dp_display_probe(struct platform_device *pdev)
 {
 	int rc = 0;
@@ -1439,6 +1468,10 @@ static int dp_display_probe(struct platform_device *pdev)
 		goto error;
 	}
 
+	rc = sysfs_create_files(&((pdev->dev).kobj),
+			usb_dp_attrs);
+	if (rc)
+		pr_err("create usb dp sysfs failed\n");
 	return 0;
 error:
 	devm_kfree(&pdev->dev, dp);
@@ -1476,6 +1509,7 @@ static int dp_display_remove(struct platform_device *pdev)
 
 	dp = platform_get_drvdata(pdev);
 
+	sysfs_remove_files(&((pdev->dev).kobj), usb_dp_attrs);
 	dp_display_deinit_sub_modules(dp);
 
 	platform_set_drvdata(pdev, NULL);

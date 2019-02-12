@@ -34,6 +34,7 @@
 #include <linux/irqchip/arm-gic-common.h>
 #include <linux/irqchip/arm-gic-v3.h>
 #include <linux/irqchip/irq-partition-percpu.h>
+#include <linux/syscore_ops.h>
 
 #include <asm/cputype.h>
 #include <asm/exception.h>
@@ -227,16 +228,21 @@ void gic_v3_dist_save(void)
 	void __iomem *base = gic_data.dist_base;
 	int reg, i;
 
+	bitmap_zero(irqs_restore, MAX_IRQ);
+
 	for (reg = SAVED_ICFGR; reg < NUM_SAVED_GICD_REGS; reg++) {
 		for_each_spi_irq_word(i, reg) {
 			saved_spi_regs_start[reg][i] =
 				read_spi_word_offset(base, reg, i);
+			changed_spi_regs_start[reg][i] = 0;
 		}
 	}
 
-	for (i = 32; i < IRQ_NR_BOUND(gic_data.irq_nr); i++)
+	for (i = 32; i < IRQ_NR_BOUND(gic_data.irq_nr); i++) {
 		gic_data.saved_spi_router[i] =
 			gic_read_irouter(base + GICD_IROUTER + i * 8);
+		gic_data.changed_spi_router[i] = 0;
+	}
 }
 
 static void _gicd_check_reg(enum gicd_save_restore_reg reg)
@@ -335,7 +341,7 @@ static void _gic_v3_dist_restore_set_reg(u32 offset)
 }
 
 #define _gic_v3_dist_restore_isenabler()		\
-		_gic_v3_dist_restore_set_reg(GICD_ISENABLER)
+		_gic_v3_dist_restore_reg(SAVED_IS_ENABLER)
 
 #define _gic_v3_dist_restore_ispending()		\
 		_gic_v3_dist_restore_set_reg(GICD_ISPENDR)
@@ -413,7 +419,7 @@ static void _gic_v3_dist_clear_reg(u32 offset)
  *
  * 5. Set pending for the interrupt.
  *
- * 6. Enable interrupt and wait for its completion.
+ * 6. Restore Enable bit of interrupt and wait for its completion.
  *
  */
 void gic_v3_dist_restore(void)
@@ -450,6 +456,8 @@ void gic_v3_dist_restore(void)
  * Note: Interrupts should be disabled on the cpu from which
  * this is called to get accurate list of pending interrupts.
  */
+extern void log_wakeup_reason(int);
+extern int msm_ipc_router_wakeup_debug_mask;
 void gic_show_pending_irqs(void)
 {
 	void __iomem *base;
@@ -457,13 +465,34 @@ void gic_show_pending_irqs(void)
 	unsigned int j;
 
 	base = gic_data.dist_base;
+
 	for (j = 0; j * 32 < gic_data.irq_nr; j++) {
 		enabled = readl_relaxed(base +
 					GICD_ISENABLER + j * 4);
 		pending[j] = readl_relaxed(base +
 					GICD_ISPENDR + j * 4);
 		pending[j] &= enabled;
-		pr_err("Pending irqs[%d] %x\n", j, pending[j]);
+	}
+
+	for (j = find_first_bit((unsigned long *)pending, gic_data.irq_nr);
+	     j < gic_data.irq_nr;
+	     j = find_next_bit((unsigned long *)pending, gic_data.irq_nr, j+1)) {
+		unsigned int irq = irq_find_mapping(gic_data.domain, j);
+		struct irq_desc *desc = irq_to_desc(irq);
+		const char *name = "null";
+
+		if (desc == NULL)
+			name = "stray irq";
+		else if(j == 513)
+			name = "pmic controller";//ee0_apps_hlos_spmi_periph_irq, please view kernel/drivers/irqchip/qcom/pdc-sdm670.c
+		else if (desc->action && desc->action->name) {
+			name = desc->action->name;
+			log_wakeup_reason(irq);
+		}
+		pr_err("%s: %d triggered %s\n", __func__, irq, name);
+		if(strstr(name,"modem")){
+			msm_ipc_router_wakeup_debug_mask = 1;
+		}
 	}
 }
 
@@ -682,6 +711,22 @@ static int gic_irq_set_vcpu_affinity(struct irq_data *d, void *vcpu)
 		irqd_clr_forwarded_to_vcpu(d);
 	return 0;
 }
+
+static void gic_resume(void)
+{
+	gic_show_pending_irqs();
+}
+
+static struct syscore_ops gic_syscore_ops = {
+	.resume = gic_resume,
+};
+
+static int __init gic_init_sys(void)
+{
+	register_syscore_ops(&gic_syscore_ops);
+	return 0;
+}
+arch_initcall(gic_init_sys);
 
 static u64 gic_mpidr_to_affinity(unsigned long mpidr)
 {

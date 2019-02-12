@@ -37,7 +37,11 @@
 static u32 dither_matrix[DITHER_MATRIX_SZ] = {
 	15, 7, 13, 5, 3, 11, 1, 9, 12, 4, 14, 6, 0, 8, 2, 10
 };
-
+//#0255385 lishaokai_ext@smartisan.com 20180629 begin
+static u32 gamma_luminance[] = {
+	3,44,91,152,229,324,419,527,675,839,1023
+};
+//#0255385 lishaokai_ext@smartisan.com 20180629 end
 static const struct drm_prop_enum_list e_topology_name[] = {
 	{SDE_RM_TOPOLOGY_NONE,	"sde_none"},
 	{SDE_RM_TOPOLOGY_SINGLEPIPE,	"sde_singlepipe"},
@@ -67,11 +71,14 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 	struct dsi_display *display;
 	struct sde_connector *c_conn;
 	int bl_lvl;
+//#0255385 lishaokai_ext@smartisan.com 20180524 begin
+	int temp;
+	int fenbianlu;
+//#0255385 lishaokai_ext@smartisan.com 20180524 end
 	struct drm_event event;
 	int rc = 0;
 
 	brightness = bd->props.brightness;
-
 	if ((bd->props.power != FB_BLANK_UNBLANK) ||
 			(bd->props.state & BL_CORE_FBBLANK) ||
 			(bd->props.state & BL_CORE_SUSPENDED))
@@ -89,6 +96,22 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 	if (!bl_lvl && brightness)
 		bl_lvl = 1;
 
+//#0255385 lishaokai_ext@smartisan.com 20180629 begin
+	if ( brightness == 0 )
+		bl_lvl = 0;
+	else if ( brightness < 15 )
+		bl_lvl = 3;
+	else if ( brightness < 255 )
+	{
+		temp = (brightness- 15 ) / 24;
+		fenbianlu  = gamma_luminance[temp + 1] - gamma_luminance[temp];
+		bl_lvl =  ((gamma_luminance[temp] * 25)  +  fenbianlu  *  (brightness  - 15 - (24  *  temp))) / 25;
+		//printk("lsk-------bl_lvl = %d,bl_lvl =((%d * 25) + %d *(%d -15 -(24 *%d))) /25 \n",bl_lvl,gamma_luminance[temp],fenbianlu,brightness,temp);
+	}
+	else
+		bl_lvl = 1023;
+	/* printk("backlight curve: after bl_lvl = %d value = %d\n",bl_lvl,brightness);*/
+//#0255385 lishaokai_ext@smartisan.com 20180629 end
 	if (c_conn->ops.set_backlight) {
 		event.type = DRM_EVENT_SYS_BACKLIGHT;
 		event.length = sizeof(u32);

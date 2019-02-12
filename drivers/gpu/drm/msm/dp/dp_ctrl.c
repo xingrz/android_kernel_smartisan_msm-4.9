@@ -142,6 +142,8 @@ static void dp_ctrl_push_idle(struct dp_ctrl *dp_ctrl)
 			idle_pattern_completion_timeout_ms))
 		pr_warn("PUSH_IDLE pattern timedout\n");
 
+	ctrl->link->link_training = false;
+
 	pr_debug("mainlink off done\n");
 }
 
@@ -1068,8 +1070,12 @@ static int dp_ctrl_setup_main_link(struct dp_ctrl_private *ctrl, bool train)
 	ctrl->catalog->reset(ctrl->catalog);
 
 	ret = dp_ctrl_link_train(ctrl);
-	if (ret)
+	if (ret) {
+		ctrl->link->link_training = false;
 		goto end;
+	}
+
+	ctrl->link->link_training = true;
 
 send_video:
 	/*

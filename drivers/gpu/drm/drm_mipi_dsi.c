@@ -1055,9 +1055,15 @@ EXPORT_SYMBOL(mipi_dsi_dcs_set_tear_scanline);
 int mipi_dsi_dcs_set_display_brightness(struct mipi_dsi_device *dsi,
 					u16 brightness)
 {
-	u8 payload[2] = { brightness & 0xff, brightness >> 8 };
 	ssize_t err;
-
+//#0255385 lishaokai_ext@smartisan.com 20180629 begin
+	u8 payload[2] = { brightness >> 8,brightness & 0xff };
+//#0255385 lishaokai_ext@smartisan.com 20180629 end
+//#0259358 lishaokai_ext@smartisan.com 20180522 begin
+	err = mipi_dsi_dcs_write(dsi, 0xFE, (u8[]){ 0x00 }, 1);
+	if (err < 0)
+		return err;
+//#0259358 lishaokai_ext@smartisan.com 20180522 end
 	err = mipi_dsi_dcs_write(dsi, MIPI_DCS_SET_DISPLAY_BRIGHTNESS,
 				 payload, sizeof(payload));
 	if (err < 0)

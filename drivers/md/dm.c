@@ -879,6 +879,7 @@ static sector_t max_io_len(sector_t sector, struct dm_target *ti)
 {
 	sector_t len = max_io_len_target_boundary(sector, ti);
 	sector_t offset, max_len;
+	sector_t optimal_len;
 
 	/*
 	 * Does the target need to split even further?
@@ -893,6 +894,9 @@ static sector_t max_io_len(sector_t sector, struct dm_target *ti)
 
 		if (len > max_len)
 			len = max_len;
+	} else if (ti->asymmetric_chunk_supported) {
+		ti->type->io_calculate(ti, sector, &optimal_len);
+		len = optimal_len;
 	}
 
 	return len;

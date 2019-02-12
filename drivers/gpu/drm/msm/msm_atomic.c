@@ -134,6 +134,12 @@ static void msm_atomic_wait_for_commit_done(
 	}
 }
 
+//#0244395 bsp madan@smartisan.com add to fix tp suspend when unplug the dp line begin.
+#define DSI_ENCODER_NAME "DSI-"
+//#define DP_ENCODER_NAME "TMDS"
+bool touch_needed = false;
+//#0244395 bsp madan@smartisan.com add to fix tp suspend when unplug the dp line end.
+
 static void
 msm_disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_state)
 {
@@ -188,6 +194,11 @@ msm_disable_outputs(struct drm_device *dev, struct drm_atomic_state *old_state)
 
 		DRM_DEBUG_ATOMIC("disabling [ENCODER:%d:%s]\n",
 				 encoder->base.id, encoder->name);
+
+//#0244395 bsp madan@smartisan.com add to fix tp suspend when unplug the dp line begin.
+		if (encoder->name && !strncmp(encoder->name, DSI_ENCODER_NAME, 4))
+			touch_needed = true;
+//#0244395 bsp madan@smartisan.com add to fix tp suspend when unplug the dp line end.
 
 		blank = MSM_DRM_BLANK_POWERDOWN;
 		notifier_data.data = &blank;
@@ -445,6 +456,11 @@ static void msm_atomic_helper_commit_modeset_enables(struct drm_device *dev,
 			continue;
 
 		encoder = connector->state->best_encoder;
+
+//#0244395 bsp madan@smartisan.com add to fix tp suspend when unplug the dp line begin.
+		if (encoder->name && !strncmp(encoder->name, DSI_ENCODER_NAME, 4))
+			touch_needed = true;
+//#0244395 bsp madan@smartisan.com add to fix tp suspend when unplug the dp line end.
 
 		DRM_DEBUG_ATOMIC("bridge enable enabling [ENCODER:%d:%s]\n",
 				 encoder->base.id, encoder->name);

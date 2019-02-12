@@ -201,6 +201,8 @@ static int dp_parser_gpio(struct dp_parser *parser)
 		"qcom,aux-en-gpio",
 		"qcom,aux-sel-gpio",
 		"qcom,usbplug-cc-gpio",
+		"qcom,mic-sel-gpio",
+		"qcom,uart-sel-gpio",
 	};
 
 	mp->gpio_config = devm_kzalloc(dev,

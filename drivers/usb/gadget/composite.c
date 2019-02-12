@@ -1707,6 +1707,7 @@ composite_setup(struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 	req->complete = composite_setup_complete;
 	req->length = 0;
 	gadget->ep0->driver_data = cdev;
+	gadget->l1_supported=0;
 
 	/*
 	 * Don't let non-standard requests match any of the cases below

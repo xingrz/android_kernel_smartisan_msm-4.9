@@ -95,6 +95,18 @@ config MANDATORY_FILE_LOCKING
 
 	  To the best of my knowledge this is dead code that no one cares about.
 
+config FILESYSTEM_STATISTICS
+	bool "file system statistics"
+	default n
+	help
+	  This option enables file system read write statistics function.
+
+config IO_MONITOR
+	bool "file system and block IO monitor"
+	default n
+	help
+	  This option enables file system and block io monitor function.
+
 source "fs/crypto/Kconfig"
 
 source "fs/notify/Kconfig"

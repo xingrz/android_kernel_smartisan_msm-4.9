@@ -746,7 +746,7 @@ out:
 	return rc;
 }
 
-#define MEM_GNT_WAIT_TIME_US	10000
+#define MEM_GNT_WAIT_TIME_US	20000
 #define MEM_GNT_RETRIES		50
 static int fg_direct_mem_request(struct fg_chip *chip, bool request)
 {

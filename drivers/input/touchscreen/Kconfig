@@ -576,7 +576,7 @@ config TOUCHSCREEN_HP600
 	depends on SH_HP6XX && SH_ADC
 	help
 	  Say Y here if you have a HP Jornada 620/660/680/690 and want to
-          support the built-in touchscreen.
+		  support the built-in touchscreen.
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called hp680_ts_input.
@@ -695,7 +695,7 @@ config TOUCHSCREEN_UCB1400
 	  This enables support for the Philips UCB1400 touchscreen interface.
 	  The UCB1400 is an AC97 audio codec.  The touchscreen interface
 	  will be initialized only after the ALSA subsystem has been
-	  brought up and the UCB1400 detected.  You therefore have to
+	  brought up and the UCB1400 detected.	You therefore have to
 	  configure ALSA support as well (either built-in or modular,
 	  independently of whether this driver is itself built-in or
 	  modular) for this driver to work.
@@ -1217,13 +1217,14 @@ config TOUCHSCREEN_ROHM_BU21023
 	  module will be called bu21023_ts.
 
 config TOUCHSCREEN_SYNAPTICS_DSX
-        bool "Synaptics Touchscreen Driver"
-        depends on I2C
-        help
-          Say Y here if you have a Synaptics Touchscreen.
+		bool "Synaptics Touchscreen Driver"
+		depends on I2C
+		help
+		  Say Y here if you have a Synaptics Touchscreen.
 
-          If unsure, say N.
+		  If unsure, say N.
 
-source "drivers/input/touchscreen/synaptics_dsx/Kconfig"
+source "drivers/input/touchscreen/focaltech_touch/Kconfig"
+source "drivers/input/touchscreen/gt1x/Kconfig"
 
 endif

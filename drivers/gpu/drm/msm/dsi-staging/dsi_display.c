@@ -55,6 +55,7 @@ static const struct of_device_id dsi_display_dt_match[] = {
 };
 
 static struct dsi_display *main_display;
+int select_display;
 
 static void dsi_display_mask_ctrl_error_interrupts(struct dsi_display *display)
 {
@@ -4592,6 +4593,193 @@ static struct platform_driver dsi_display_driver = {
 	},
 };
 
+int select_lcd_id;
+#define BUFFER_LENGTH 512
+
+extern int dsi_panel_create_cmd_packets(const char *data,
+					u32 length,
+					u32 count,
+					struct dsi_cmd_desc *cmd);
+static unsigned char recv[512];
+static unsigned int recv_len;
+static ssize_t dsi_access_sysfs_read_store(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+	int retval = -EINVAL;
+	unsigned char data[512];
+	u32 length = 0;
+	int index = 0;
+	char *input = (char *)buf;
+	char *token;
+	u32 flags = 0;
+	u32 temp_data;
+	struct dsi_cmd_desc cmd;
+	struct dsi_display_ctrl *m_ctrl = &main_display->ctrl[main_display->cmd_master_idx];
+
+	if (buf == NULL || (main_display->panel->panel_power_state == 0))
+		return retval;
+
+	mutex_unlock(&main_display->panel->transfer_mutex);
+	memset(data, 0, sizeof(data));
+	memset(recv, 0, sizeof(recv));
+
+	data[1] = 0x1;
+	data[2] = 0x0;
+	data[3] = 0x1;
+	data[4] = 0x0;
+	data[5] = 0x0;
+
+	while (input != NULL && index < BUFFER_LENGTH) {
+		token = strsep(&input, " ");
+		retval = sscanf(token, "%x", &temp_data);
+		if (retval < 0) {
+			pr_err("%s: Failed to convert \"%s\" to hex number\n",
+					__func__, token);
+			goto exit;
+		}
+		data[index] = temp_data;
+		if (index++ == 0)
+			index = 6;
+	}
+
+	length = index;
+
+	cmd.msg.flags = 0;
+	retval = dsi_panel_create_cmd_packets(data, length, 1, &cmd);
+	if (retval) {
+		pr_err("failed to create cmd packets, rc=%d\n", retval);
+		goto exit;
+	}
+
+	cmd.msg.rx_buf = recv;
+	cmd.msg.rx_len = data[6];
+	recv_len = data[6];
+	if (cmd.last_command) {
+		cmd.msg.flags |= MIPI_DSI_MSG_LASTCOMMAND;
+		flags |= DSI_CTRL_CMD_LAST_COMMAND;
+	}
+
+	flags |= (DSI_CTRL_CMD_FETCH_MEMORY | DSI_CTRL_CMD_READ);
+	retval = dsi_ctrl_cmd_transfer(m_ctrl->ctrl, &cmd.msg, flags);
+	if (retval <= 0) {
+		pr_err("rx cmd transfer failed rc=%d\n", retval);
+		goto exit;
+	}
+
+	if (cmd.post_wait_ms)
+		usleep_range(cmd.post_wait_ms*1000,
+				((cmd.post_wait_ms*1000)+10));
+
+	retval = count;
+exit:
+	mutex_unlock(&main_display->panel->transfer_mutex);
+	return retval;
+}
+
+static ssize_t dsi_access_sysfs_read_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	unsigned int count = 0;
+	unsigned int idx;
+	unsigned int cnt;
+
+	for (idx = 0; idx < recv_len; idx++) {
+		cnt = snprintf(buf, PAGE_SIZE - count, "%02x \n", recv[idx]);
+		buf += cnt;
+		count += cnt;
+	}
+
+	return count;
+}
+
+static ssize_t dsi_access_sysfs_write_store(struct device *dev,
+		struct device_attribute *attr,
+		const char *buf, size_t count)
+{
+	int retval = -EINVAL;
+	unsigned char data[512];
+	u32 length = 0;
+	int index = 0;
+	char *input = (char *)buf;
+	char *token;
+	u32 flags = 0;
+	u32 temp_data;
+	struct dsi_cmd_desc cmd;
+	const struct mipi_dsi_host_ops *ops = main_display->panel->host->ops;
+
+	if (buf == NULL || (main_display->panel->panel_power_state == 0))
+		return retval;
+	mutex_lock(&main_display->panel->transfer_mutex);
+	memset(data, 0, sizeof(data));
+	memset(recv, 0, sizeof(recv));
+
+	data[1] = 0x1;
+	data[2] = 0x0;
+	data[3] = 0x0;
+	data[4] = 0x0;
+	data[5] = 0x0;
+
+	while (input != NULL && index < BUFFER_LENGTH) {
+		token = strsep(&input, " ");
+		retval = sscanf(token, "%x", &temp_data);
+		if (retval < 0) {
+			pr_err("%s: Failed to convert \"%s\" to hex number\n",
+					__func__, token);
+			goto exit;
+		}
+		data[index] = temp_data;
+		if (index++ == 0)
+			index = 6;
+	}
+
+	length = index;
+
+	cmd.msg.flags = 0;
+	retval = dsi_panel_create_cmd_packets(data, length, 1, &cmd);
+	if (retval) {
+		pr_err("failed to create cmd packets, rc=%d\n", retval);
+		goto exit;
+	}
+
+	if (cmd.last_command) {
+		cmd.msg.flags |= MIPI_DSI_MSG_LASTCOMMAND | MIPI_DSI_MSG_USE_LPM;
+		flags |= DSI_CTRL_CMD_LAST_COMMAND;
+	}
+
+	flags |= DSI_CTRL_CMD_FETCH_MEMORY;
+
+	retval = ops->transfer(main_display->panel->host, &cmd.msg);
+	if (retval < 0) {
+		pr_err("failed to set cmds, rc=%d\n", retval);
+		goto exit;
+	}
+
+	if (cmd.post_wait_ms)
+		usleep_range(cmd.post_wait_ms*1000,
+				((cmd.post_wait_ms*1000)+10));
+
+	retval = count;
+exit:
+	mutex_unlock(&main_display->panel->transfer_mutex);
+	return retval;
+}
+
+static DEVICE_ATTR(read, (S_IRUSR|S_IRGRP|S_IWUSR | S_IWGRP),
+		        dsi_access_sysfs_read_show, dsi_access_sysfs_read_store);
+static DEVICE_ATTR(write, (S_IWUSR | S_IWGRP),
+		NULL, dsi_access_sysfs_write_store);
+
+static struct attribute *dsi_access_attrs[] = {
+	&dev_attr_read.attr,
+	&dev_attr_write.attr,
+	NULL,
+};
+
+static struct attribute_group dsi_access_attr_group = {
+	.attrs = dsi_access_attrs,
+};
+
 int dsi_display_dev_probe(struct platform_device *pdev)
 {
 	int rc = 0;
@@ -4614,7 +4802,7 @@ int dsi_display_dev_probe(struct platform_device *pdev)
 		display->name = "unknown";
 
 	if (!boot_displays_parsed) {
-		boot_displays[DSI_PRIMARY].boot_disp_en = false;
+		boot_displays[DSI_PRIMARY].boot_disp_en = true;
 		boot_displays[DSI_SECONDARY].boot_disp_en = false;
 		if (dsi_display_parse_boot_display_selection())
 			pr_debug("Display Boot param not valid/available\n");
@@ -4631,6 +4819,7 @@ int dsi_display_dev_probe(struct platform_device *pdev)
 		display->is_active = dsi_display_name_compare(pdev->dev.of_node,
 						display->name, DSI_PRIMARY);
 		if (display->is_active) {
+			select_display = 1;
 			if (comp_add_success) {
 				(void)_dsi_display_dev_deinit(main_display);
 				component_del(&main_display->pdev->dev,
@@ -4709,7 +4898,12 @@ int dsi_display_dev_probe(struct platform_device *pdev)
 		pr_debug("Component_add success: %s\n", display->name);
 		if (!display_from_cmdline)
 			default_active_node = pdev->dev.of_node;
+
+		rc = sysfs_create_group(&pdev->dev.kobj, &dsi_access_attr_group);
+		if (rc)
+			pr_err("sysfs group creation failed, rc=%d\n", rc);
 	}
+
 	return rc;
 }
 
@@ -6226,6 +6420,11 @@ error_disable_panel:
 	(void)dsi_panel_disable(display->panel);
 error:
 	mutex_unlock(&display->display_lock);
+	if (!display->panel) {
+		pr_err("Invalid params\n");
+		rc = -EINVAL;
+	}else
+		display->panel->panel_power_state = 1;
 	return rc;
 }
 
@@ -6287,6 +6486,11 @@ int dsi_display_disable(struct dsi_display *display)
 		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
+	if (!display->panel) {
+		pr_err("invalid params\n");
+		return -EINVAL;
+	}else
+		display->panel->panel_power_state = 0;
 
 	mutex_lock(&display->display_lock);
 

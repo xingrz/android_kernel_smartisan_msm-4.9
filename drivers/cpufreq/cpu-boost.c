@@ -23,6 +23,53 @@
 #include <linux/input.h>
 #include <linux/time.h>
 
+
+/*Smartisan_SYS:Alex_Ma(majianbo) add for CPU Boost of smartisan*/ 
+/*
+*CPU boost policy:
+*caseA: light loading(CPU_N=1):min frequence limitation(idle/wakeup)
+*caseB: medium loading (1<CPU_N<8):limit policy(0/6) + dynamic loading boostloading 
+*caseC:heavy loading(N=8):policy(0/6)->cpufreq limitation+ dynamic loading boostloading+sche boost to golden sectors.
+
+*Window policy:
+*caseA:EV_KEY: HW freq is 3~4HZ, so long period limitation is used.
+*caseB:BTN_TOUCH/EV_ABS: HW freq is 60~90HZ, short period limitation for TP  input event.
+*/
+#define SMARTISAN_CPU_BOOST 0
+/*Smartisan_SYS:Alex_Ma(majianbo) add for CPU Boost of smartisan policy end*/
+
+#if SMARTISAN_CPU_BOOST
+
+#define SMARTISAN_CPU_BOOST_DEBUG 0
+#define SMARTISAN_DYNAMIC_WIN 1
+
+#define MAX_ONLINE_CPU 8
+static bool SILVER_CLUSTER_FAKE_ENABLE=false;
+
+static unsigned int smartisn_dynamicms=5;
+module_param(smartisn_dynamicms, uint, 0644);
+
+typedef struct cpufreq_policy_type{
+    unsigned int min_freq;
+    unsigned int max_freq;
+    unsigned int thr_freq;
+    unsigned int ctrl_cpu;
+}cpufreq_policy;
+
+enum prolicy{
+	GOLDEN_CLUSTER=0,
+	SILVER_CLUSTER=1,
+};
+
+static cpufreq_policy policy_array[] ={
+    {300000,1708800, 576000,0},//CPU0-5-Policy0
+    {300000,2208000 ,300000,6},//CPU6-7-Policy6
+};
+unsigned int cup_cur_freq[MAX_ONLINE_CPU];
+
+#endif
+
+
 struct cpu_sync {
 	int cpu;
 	unsigned int input_boost_min;
@@ -46,7 +93,12 @@ static bool sched_boost_active;
 
 static struct delayed_work input_boost_rem;
 static u64 last_input_time;
-#define MIN_INPUT_INTERVAL (150 * USEC_PER_MSEC)
+
+#if SMARTISAN_CPU_BOOST
+	#define MIN_INPUT_INTERVAL (120 * USEC_PER_MSEC)
+#else
+	#define MIN_INPUT_INTERVAL (150 * USEC_PER_MSEC)
+#endif
 
 static int set_input_boost_freq(const char *buf, const struct kernel_param *kp)
 {
@@ -82,7 +134,20 @@ static int set_input_boost_freq(const char *buf, const struct kernel_param *kp)
 		cp = strchr(cp, ' ');
 		cp++;
 	}
-
+	
+#if SMARTISAN_CPU_BOOST
+	if  (per_cpu(sync_info, policy_array[SILVER_CLUSTER].ctrl_cpu).input_boost_freq==0)
+	{
+		per_cpu(sync_info, policy_array[SILVER_CLUSTER].ctrl_cpu).input_boost_freq = \
+			per_cpu(sync_info, policy_array[GOLDEN_CLUSTER].ctrl_cpu).input_boost_freq;
+		SILVER_CLUSTER_FAKE_ENABLE=true;
+	}	
+	else
+	{
+		SILVER_CLUSTER_FAKE_ENABLE=false;
+	}	
+#endif
+		
 check_enable:
 	for_each_possible_cpu(i) {
 		if (per_cpu(sync_info, i).input_boost_freq) {
@@ -151,6 +216,7 @@ static struct notifier_block boost_adjust_nb = {
 	.notifier_call = boost_adjust_notify,
 };
 
+
 static void update_policy_online(void)
 {
 	unsigned int i;
@@ -158,7 +224,6 @@ static void update_policy_online(void)
 	/* Re-evaluate policy to trigger adjust notifier for online CPUs */
 	get_online_cpus();
 	for_each_online_cpu(i) {
-		pr_debug("Updating policy for CPU%d\n", i);
 		cpufreq_update_policy(i);
 	}
 	put_online_cpus();
@@ -166,7 +231,7 @@ static void update_policy_online(void)
 
 static void do_input_boost_rem(struct work_struct *work)
 {
-	unsigned int i, ret;
+	unsigned int i;
 	struct cpu_sync *i_sync_info;
 
 	/* Reset the input_boost_min for all CPUs in the system */
@@ -180,13 +245,91 @@ static void do_input_boost_rem(struct work_struct *work)
 	update_policy_online();
 
 	if (sched_boost_active) {
-		ret = sched_set_boost(0);
-		if (ret)
-			pr_err("cpu-boost: HMP boost disable failed\n");
+		sched_set_boost(0);
 		sched_boost_active = false;
 	}
 }
+#if SMARTISAN_CPU_BOOST
+static void do_input_boost(struct work_struct *work)
+{
+	unsigned int i, ret,boost_dynamic_win=0,j=0;
+	bool sched_boost=false;
+	struct cpu_sync *i_sync_info= &per_cpu(sync_info,j);
+		
+	//it will cancel and flush work.
+	cancel_delayed_work_sync(&input_boost_rem);
+		if (sched_boost_active) {
+			sched_set_boost(0);
+			sched_boost_active = false;
+	}
 
+       //If silver limit is set.
+       if(SILVER_CLUSTER_FAKE_ENABLE==false){
+	   	
+              #if SMARTISAN_CPU_BOOST_DEBUG
+	      		printk("cpuboost: SILVERFAKE_ENABLE false\n");
+      		#endif
+		for_each_possible_cpu(i) {
+			i_sync_info = &per_cpu(sync_info, i);
+			i_sync_info->input_boost_min = i_sync_info->input_boost_freq;
+		}
+	}
+	else{
+//====setp1: check min freq cpu-boost.c
+		#if SMARTISAN_CPU_BOOST_DEBUG
+			printk("cpuboost: SILVERFAKE_ENABLE false\n");
+		#endif			
+		for_each_possible_cpu(i) {
+		cup_cur_freq[i] = cpufreq_get(i);
+		
+		#if SMARTISAN_CPU_BOOST_DEBUG
+			printk("cpuboost: cpufreq_get i=%d=%d\n",i,cup_cur_freq[i] );
+		#endif
+		}
+
+		if((cup_cur_freq[policy_array[SILVER_CLUSTER].ctrl_cpu] >policy_array[GOLDEN_CLUSTER].thr_freq)&&\
+			(cup_cur_freq[policy_array[SILVER_CLUSTER].ctrl_cpu+1] >policy_array[GOLDEN_CLUSTER].thr_freq)){
+			sched_boost=true;
+		}
+			  
+		for_each_possible_cpu(i) {
+			if((sched_boost==true)||(i<policy_array[SILVER_CLUSTER].ctrl_cpu)){
+				i_sync_info = &per_cpu(sync_info, i);
+				i_sync_info->input_boost_min = i_sync_info->input_boost_freq;
+			}
+		}
+			
+//====step2: calculate boost_windows
+			#if SMARTISAN_DYNAMIC_WIN
+			if((cup_cur_freq[policy_array[GOLDEN_CLUSTER].ctrl_cpu]!=0)&&(policy_array[GOLDEN_CLUSTER].max_freq!=0)){
+				boost_dynamic_win+=smartisn_dynamicms*cup_cur_freq[policy_array[GOLDEN_CLUSTER].ctrl_cpu]/policy_array[GOLDEN_CLUSTER].max_freq;
+			}
+
+			if((cup_cur_freq[policy_array[SILVER_CLUSTER].ctrl_cpu]!=0)&&(policy_array[SILVER_CLUSTER].max_freq!=0)){
+				boost_dynamic_win+=smartisn_dynamicms*cup_cur_freq[policy_array[SILVER_CLUSTER].ctrl_cpu]/policy_array[SILVER_CLUSTER].max_freq;
+
+			}
+			#if SMARTISAN_CPU_BOOST_DEBUG
+				printk("cpuboost:boost_dynamic_win=%d\n",boost_dynamic_win);
+			#endif
+			#endif
+	}
+	
+	update_policy_online();
+	
+//====step3: check  sche  mode
+	if ((sched_boost_on_input > 0) ||(sched_boost==true)){
+		ret = sched_set_boost(1);
+		if (ret)
+			pr_err("cpu-boost: HMP boost enable failed\n");
+		else
+			sched_boost_active = true;
+	}
+
+	queue_delayed_work(cpu_boost_wq, &input_boost_rem,
+					msecs_to_jiffies(input_boost_ms+boost_dynamic_win));
+}
+#else
 static void do_input_boost(struct work_struct *work)
 {
 	unsigned int i, ret;
@@ -220,18 +363,41 @@ static void do_input_boost(struct work_struct *work)
 	queue_delayed_work(cpu_boost_wq, &input_boost_rem,
 					msecs_to_jiffies(input_boost_ms));
 }
+#endif
 
 static void cpuboost_input_event(struct input_handle *handle,
 		unsigned int type, unsigned int code, int value)
 {
 	u64 now;
+#if SMARTISAN_CPU_BOOST
+	u64 window_time=0;
+#endif
 
 	if (!input_boost_enabled)
 		return;
+	
+#if SMARTISAN_CPU_BOOST
+	switch (type) {
+		case EV_ABS:
+			window_time=0;
+		break;
+		case EV_KEY:
+			window_time=50*USEC_PER_MSEC;
+		break;	
+		//case: release(type==0)
+		default: 
+			window_time=30*USEC_PER_MSEC;
+		break;
+	}
+#endif
 
 	now = ktime_to_us(ktime_get());
+#if SMARTISAN_CPU_BOOST
+	if ((now - last_input_time) < (MIN_INPUT_INTERVAL+window_time))
+#else	
 	if (now - last_input_time < MIN_INPUT_INTERVAL)
-		return;
+#endif		
+	return;
 
 	if (work_pending(&input_boost_work))
 		return;
@@ -327,6 +493,7 @@ static int cpu_boost_init(void)
 		s = &per_cpu(sync_info, cpu);
 		s->cpu = cpu;
 	}
+
 	cpufreq_register_notifier(&boost_adjust_nb, CPUFREQ_POLICY_NOTIFIER);
 
 	ret = input_register_handler(&cpuboost_input_handler);

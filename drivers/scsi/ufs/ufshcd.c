@@ -52,6 +52,8 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/ufs.h>
 
+int pro_flag = 0;
+
 #ifdef CONFIG_DEBUG_FS
 
 static int ufshcd_tag_req_type(struct request *rq)
@@ -7443,6 +7445,7 @@ static void ufshcd_set_active_icc_lvl(struct ufs_hba *hba)
 			__func__, icc_level, ret);
 }
 
+extern char android_boot_dev[ANDROID_BOOT_DEV_MAX];
 /**
  * ufshcd_scsi_add_wlus - Adds required W-LUs
  * @hba: per-adapter instance
@@ -7514,7 +7517,7 @@ static int ufshcd_scsi_add_wlus(struct ufs_hba *hba)
 		scsi_device_put(sdev_boot);
 	}
 
-	if (is_embedded_dev) {
+	if((is_embedded_dev) && (0==strcmp(android_boot_dev, dev_name(hba->dev)))) {
 		sdev_rpmb = __scsi_add_device(hba->host, 0, 0,
 			ufshcd_upiu_wlun_to_scsi_wlun(UFS_UPIU_RPMB_WLUN),
 			NULL);
@@ -7814,6 +7817,11 @@ static int ufs_read_device_desc_data(struct ufs_hba *hba)
 	if (err)
 		return err;
 
+	if (0x7F != desc_buf[DEVICE_DESC_PARAM_HIGH_PR_LUN])
+		pro_flag = 1;
+	else
+		pro_flag = 0;
+
 	/*
 	 * getting vendor (manufacturerID) and Bank Index in big endian
 	 * format
@@ -7826,6 +7834,18 @@ static int ufs_read_device_desc_data(struct ufs_hba *hba)
 	hba->dev_info.i_product_name = desc_buf[DEVICE_DESC_PARAM_PRDCT_NAME];
 
 	return 0;
+}
+
+ssize_t ufs_provision_show(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	return sprintf(buf, "%d\n", pro_flag);
+}
+DEVICE_ATTR_RO(ufs_provision);
+
+void ufshcd_add_sysfs_prov(struct ufs_hba *hba)
+{
+	device_create_file(hba->dev, &dev_attr_ufs_provision);
 }
 
 static void ufshcd_init_desc_sizes(struct ufs_hba *hba)
@@ -8019,9 +8039,16 @@ out:
 	/*
 	 * If we failed to initialize the device or the device is not
 	 * present, turn off the power/clocks etc.
+        * In cases when there's both ufs and emmc present and regualtors
+        * are shared b/w the two, this shouldn't turn-off the regulators
+        * w/o giving emmc a chance to send PON.
+        * Hence schedule a delayed suspend, thus giving enough time to
+        * emmc to vote for the shared regulator.
 	 */
-	if (ret && !ufshcd_eh_in_progress(hba) && !hba->pm_op_in_progress)
-		pm_runtime_put_sync(hba->dev);
+       if (ret && !ufshcd_eh_in_progress(hba) && !hba->pm_op_in_progress) {
+               pm_runtime_put_noidle(hba->dev);
+               pm_schedule_suspend(hba->dev, MSEC_PER_SEC * 10);
+       }
 
 	trace_ufshcd_init(dev_name(hba->dev), ret,
 		ktime_to_us(ktime_sub(ktime_get(), start)),
@@ -10633,6 +10660,8 @@ int ufshcd_init(struct ufs_hba *hba, void __iomem *mmio_base, unsigned int irq)
 	ufsdbg_add_debugfs(hba);
 
 	ufshcd_add_sysfs_nodes(hba);
+
+	ufshcd_add_sysfs_prov(hba);
 
 	return 0;
 

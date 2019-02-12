@@ -3619,11 +3619,13 @@ static int gpiolib_seq_show(struct seq_file *s, void *v)
 		seq_printf(s, ", can sleep");
 	seq_printf(s, ":\n");
 
+#if 0
 	if (chip->dbg_show)
 		chip->dbg_show(s, chip);
 	else
-		gpiolib_dbg_show(s, gdev);
-
+#else
+	gpiolib_dbg_show(s, gdev);
+#endif
 	return 0;
 }
 

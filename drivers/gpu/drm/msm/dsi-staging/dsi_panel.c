@@ -21,6 +21,7 @@
 
 #include "dsi_panel.h"
 #include "dsi_ctrl_hw.h"
+#include "ocean_ct_rm69298.h"
 
 /**
  * topology is currently defined by a set of following 3 values:
@@ -49,6 +50,29 @@ enum dsi_dsc_ratio_type {
 	DSC_RATIO_TYPE_MAX
 };
 
+//#0243874 bsp madan@smartisan.com add to show panel on/off state begin.
+//0249208 bsp madan@smartisan.com add to support eye protect mode begin.
+#define PANEL_ON_STATE  1
+#define PANEL_OFF_STATE 0
+static int panel_power_state = PANEL_ON_STATE;
+static struct dsi_panel * set_panel;
+bool goodix_glove_mode = 0;
+extern int select_display;
+u32 is_eye_care_mode = 0;
+u32 is_CGM_enable = 0;
+int faceid_enable = 0;
+u32 set_color_enable[2];
+u32 is_color_mode = 0;
+//0249208 bsp madan@smartisan.com add to support eye protect mode end.
+//#0243874 bsp madan@smartisan.com add to show panel on/off state end.
+
+//#0261410 lishaokai_ext@smartisan.com 201800601 begin
+
+/*the cool_cmd <-> cool color temperature's 20 levels*/
+static struct dsi_panel_cmd_set cool_cmd[TOTAL_LEVEL];
+/*the cool_cmd <-> warm color temperature's 20 levels*/
+static struct dsi_panel_cmd_set warm_cmd[TOTAL_LEVEL];
+//#0261410 lishaokai_ext@smartisan.com 201800601 end
 static u32 dsi_dsc_rc_buf_thresh[] = {0x0e, 0x1c, 0x2a, 0x38, 0x46, 0x54,
 		0x62, 0x69, 0x70, 0x77, 0x79, 0x7b, 0x7d, 0x7e};
 
@@ -425,11 +449,11 @@ static int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable)
 	return rc;
 }
 
-
+extern int goodix_lcd_state_chg_callback(int lcd_on);
 static int dsi_panel_power_on(struct dsi_panel *panel)
 {
 	int rc = 0;
-
+	pr_err("%s:begin to power on panel\n", __func__);
 	rc = dsi_pwr_enable_regulator(&panel->power_info, true);
 	if (rc) {
 		pr_err("[%s] failed to enable vregs, rc=%d\n", panel->name, rc);
@@ -447,6 +471,12 @@ static int dsi_panel_power_on(struct dsi_panel *panel)
 		pr_err("[%s] failed to reset panel, rc=%d\n", panel->name, rc);
 		goto error_disable_gpio;
 	}
+
+	goodix_lcd_state_chg_callback(1);
+
+	//#0243874 bsp madan@smartisan.com add to show panel on/off state begin.
+	panel_power_state = PANEL_ON_STATE;
+	//#0243874 bsp madan@smartisan.com add to show panel on/off state end.
 
 	goto exit;
 
@@ -469,6 +499,9 @@ exit:
 static int dsi_panel_power_off(struct dsi_panel *panel)
 {
 	int rc = 0;
+	pr_err("%s:begin to power off panel\n", __func__);
+	mutex_lock(&panel->transfer_mutex);
+	goodix_lcd_state_chg_callback(0);
 
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
 		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
@@ -489,10 +522,16 @@ static int dsi_panel_power_off(struct dsi_panel *panel)
 	if (rc)
 		pr_err("[%s] failed to enable vregs, rc=%d\n", panel->name, rc);
 
+	//#0243874 bsp madan@smartisan.com add to show panel on/off state begin.
+	panel_power_state = PANEL_OFF_STATE;
+	//#0243874 bsp madan@smartisan.com add to show panel on/off state end.
+	mutex_unlock(&panel->transfer_mutex);
 	return rc;
 }
+
+
 static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
-				enum dsi_cmd_set_type type)
+				int type, int color_flag)
 {
 	int rc = 0, i = 0;
 	ssize_t len;
@@ -502,17 +541,36 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 	struct dsi_display_mode *mode;
 	const struct mipi_dsi_host_ops *ops = panel->host->ops;
 
-	if (!panel || !panel->cur_mode)
+	if (!panel || !panel->cur_mode || (panel->panel_power_state == 0 &&
+				!(type < DSI_CMD_SET_PRE_RES_SWITCH ||
+					type == DSI_CMD_SET_NOLP)))
 		return -EINVAL;
 
 	if (panel->type == EXT_BRIDGE)
 		return 0;
 
+	mutex_lock(&panel->transfer_mutex);
 	mode = panel->cur_mode;
 
-	cmds = mode->priv_info->cmd_sets[type].cmds;
-	count = mode->priv_info->cmd_sets[type].count;
-	state = mode->priv_info->cmd_sets[type].state;
+	if(type < DSI_CMD_SET_MAX){
+		cmds = mode->priv_info->cmd_sets[type].cmds;
+		count = mode->priv_info->cmd_sets[type].count;
+		state = mode->priv_info->cmd_sets[type].state;
+	}
+	else{
+		if((type - DSI_CMD_SET_MAX) >= TOTAL_LEVEL)
+			goto error;
+		if(color_flag == 0){
+			cmds = cool_cmd[type - DSI_CMD_SET_MAX].cmds;
+			count = cool_cmd[type - DSI_CMD_SET_MAX].count;
+			state = cool_cmd[type - DSI_CMD_SET_MAX].state;
+		}
+		else{
+			cmds = warm_cmd[type - DSI_CMD_SET_MAX].cmds;
+			count = warm_cmd[type - DSI_CMD_SET_MAX].count;
+			state = warm_cmd[type - DSI_CMD_SET_MAX].state;
+		}
+	}
 
 	if (count == 0) {
 		pr_debug("[%s] No commands to be sent for state(%d)\n",
@@ -539,8 +597,10 @@ static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 		cmds++;
 	}
 error:
+	mutex_unlock(&panel->transfer_mutex);
 	return rc;
 }
+//0249208 bsp madan@smartisan.com add to support eye protect mode end.
 
 static int dsi_panel_pinctrl_deinit(struct dsi_panel *panel)
 {
@@ -550,6 +610,11 @@ static int dsi_panel_pinctrl_deinit(struct dsi_panel *panel)
 
 	return rc;
 }
+
+#ifdef CONFIG_SERIAL_CORE_CONSOLE
+extern int do_skip_serial;
+static struct pinctrl_state *gpio51_52_set;
+#endif
 
 static int dsi_panel_pinctrl_init(struct dsi_panel *panel)
 {
@@ -579,6 +644,23 @@ static int dsi_panel_pinctrl_init(struct dsi_panel *panel)
 		pr_err("failed to get pinctrl suspend state, rc=%d\n", rc);
 		goto error;
 	}
+
+#ifdef CONFIG_SERIAL_CORE_CONSOLE
+	if(do_skip_serial) {
+		gpio51_52_set = pinctrl_lookup_state(panel->pinctrl.pinctrl, "gpio51_52_set");
+		if(IS_ERR_OR_NULL(gpio51_52_set)){
+			rc = PTR_ERR(gpio51_52_set);
+			pr_err("%s:failed to get pinctrl gpio51_52 state, rc=%d\n",__func__, rc);
+			goto error;
+		}else{
+			rc = pinctrl_select_state(panel->pinctrl.pinctrl, gpio51_52_set);
+			if (rc < 0){
+				pr_err("%s: failed to set pinctrl gpio51_52 state ,rc=%d\n",__func__,rc);
+				goto error;
+			}
+		}
+	}
+#endif 
 
 error:
 	return rc;
@@ -637,11 +719,11 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 	}
 
 	dsi = &panel->mipi_device;
-
+	mutex_lock(&panel->transfer_mutex);
 	rc = mipi_dsi_dcs_set_display_brightness(dsi, bl_lvl);
 	if (rc < 0)
 		pr_err("failed to update dcs backlight:%d\n", bl_lvl);
-
+	mutex_unlock(&panel->transfer_mutex);
 	return rc;
 }
 
@@ -1391,6 +1473,7 @@ error:
 const char *cmd_set_prop_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-pre-on-command",
 	"qcom,mdss-dsi-on-command",
+	"qcom,mdss-dsi-on-command-old",
 	"qcom,mdss-dsi-post-panel-on-command",
 	"qcom,mdss-dsi-pre-off-command",
 	"qcom,mdss-dsi-off-command",
@@ -1408,13 +1491,36 @@ const char *cmd_set_prop_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-nolp-command",
 	"PPS not parsed from DTSI, generated dynamically",
 	"ROI not parsed from DTSI, generated dynamically",
+	"qcom,mdss-dsi-roi-prepare",
+	"qcom,mdss-dsi-HBM-enable",
+	"qcom,mdss-dsi-HBM-disable",
+	"qcom,mdss-dsi-CGM-P3-feature",
+	"qcom,mdss-dsi-CGM-sRGB-feature",
+	"qcom,mdss-dsi-CGM-Native-feature",
 	"qcom,mdss-dsi-timing-switch-command",
 	"qcom,mdss-dsi-post-mode-switch-on-command",
+//0249208 bsp madan@smartisan.com add to support eye protect mode begin.
+	"qcom,mdss-dsi-panel-color-temperature-command",
+	"qcom,mdss-dsi-panel-color-temperature-command-resume",
+	"qcom,mdss-dsi-panel-color-temperature-command-reset",
+	"qcom,mdss-dsi-panel-color-temperature-command-restore",
+	"qcom,mdss-dsi-panel-sre-strong-level",
+	"qcom,mdss-dsi-panel-sre-exit",
+	"qcom,mdss-dsi-panel-sre-weak-level",
+	"qcom,mdss-dsi-panel-sre-middle-level",
+	"qcom,mdss-dsi-panel-sre-strong-level",
+	"qcom,mdss-dsi-panel-sre-exit-papermode",
+	"qcom,mdss-dsi-panel-sre-exit-normal",
+	"qcom,mdss-dsi-panel-color-prepare",
+//0249208 bsp madan@smartisan.com add to support eye protect mode end.
+	"qcom,mdss-dsi-panel-ct-enter",
+	"qcom,mdss-dsi-panel-ct-exit",
 };
 
 const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-pre-on-command-state",
 	"qcom,mdss-dsi-on-command-state",
+	"qcom,mdss-dsi-on-command-old-state",
 	"qcom,mdss-dsi-post-on-command-state",
 	"qcom,mdss-dsi-pre-off-command-state",
 	"qcom,mdss-dsi-off-command-state",
@@ -1432,8 +1538,30 @@ const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-nolp-command-state",
 	"PPS not parsed from DTSI, generated dynamically",
 	"ROI not parsed from DTSI, generated dynamically",
+	"qcom,mdss-dsi-roi-prepare-state",
+	"qcom,mdss-dsi-HBM-enable-state",
+	"qcom,mdss-dsi-HBM-disable-state",
+	"qcom,mdss-dsi-CGM-P3-feature-state",
+	"qcom,mdss-dsi-CGM-sRGB-feature-state",
+	"qcom,mdss-dsi-CGM-Native-feature-state",
 	"qcom,mdss-dsi-timing-switch-command-state",
 	"qcom,mdss-dsi-post-mode-switch-on-command-state",
+//0249208 bsp madan@smartisan.com add to support eye protect mode begin.
+	"qcom,mdss-dsi-panel-color-temperature-command-state",
+	"qcom,mdss-dsi-panel-color-temperature-command-resume-state",
+	"qcom,mdss-dsi-panel-color-temperature-command-reset-state",
+	"qcom,mdss-dsi-panel-color-temperature-command-restore-state",
+	"qcom,mdss-dsi-panel-sre-strong-level-state",
+	"qcom,mdss-dsi-panel-sre-exit-state",
+	"qcom,mdss-dsi-panel-sre-weak-level-state",
+	"qcom,mdss-dsi-panel-sre-middle-level-state",
+	"qcom,mdss-dsi-panel-sre-strong-level-state",
+	"qcom,mdss-dsi-panel-sre-exit-papermode-state",
+	"qcom,mdss-dsi-panel-sre-exit-normal-state",
+	"qcom,mdss-dsi-panel-color-prepare-state",
+//0249208 bsp madan@smartisan.com add to support eye protect mode end.
+	"qcom,mdss-dsi-panel-ct-enter-state",
+	"qcom,mdss-dsi-panel-ct-exit-state",
 };
 
 static int dsi_panel_get_cmd_pkt_count(const char *data, u32 length, u32 *cnt)
@@ -1460,7 +1588,7 @@ static int dsi_panel_get_cmd_pkt_count(const char *data, u32 length, u32 *cnt)
 	return 0;
 }
 
-static int dsi_panel_create_cmd_packets(const char *data,
+int dsi_panel_create_cmd_packets(const char *data,
 					u32 length,
 					u32 count,
 					struct dsi_cmd_desc *cmd)
@@ -1607,7 +1735,6 @@ static int dsi_panel_parse_cmd_sets(
 		set = &priv_info->cmd_sets[i];
 		set->type = i;
 		set->count = 0;
-
 		if (i == DSI_CMD_SET_PPS) {
 			rc = dsi_panel_alloc_cmd_packets(set, 1);
 			if (rc)
@@ -2862,6 +2989,7 @@ struct dsi_panel *dsi_panel_get(struct device *parent,
 	panel->panel_of_node = of_node;
 	drm_panel_init(&panel->drm_panel);
 	mutex_init(&panel->panel_lock);
+	mutex_init(&panel->transfer_mutex);
 	panel->parent = parent;
 	return panel;
 error:
@@ -2877,6 +3005,430 @@ void dsi_panel_put(struct dsi_panel *panel)
 
 	kfree(panel);
 }
+
+//0254819 bsp madan@smartisan.com add to support tp glove mode begin.
+
+extern int if_use_focal_ic(void);
+extern int fts_enter_glove_mode(int mode);
+extern void gt1x_enter_glove_mode(u8 glove_flag);
+//0254819 bsp madan@smartisan.com add to support tp glove mode end.
+
+//#0265177 madan@smartisan.com add begin.
+extern int fts_enter_slide_mode(int mode);
+//#0265177 madan@smartisan.com add end.
+
+//0249208 bsp madan@smartisan.com add to support eye protect mode begin.
+void dsi_panel_set_ie_level(u32 ie_level)
+{
+	int rc = 0;
+
+	pr_debug("%s:set diplay panel ie_level is %d", __func__, ie_level);
+	if(set_panel->panel_power_state == 0){
+		pr_err("%s:in power off state.\n", __func__);
+		return;
+	}
+
+	switch (ie_level) {
+	case 10:
+		is_eye_care_mode = 1;
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_COMMAND, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_COLOR_COMMAND cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+	case 12:
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_RESUME, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_COLOR_RESUME cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+//#0265989 lishaokai_ext@smartisan.com begin 20180607 begin
+	case 14:
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_CT_ENRER, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_CT_ENRER cmds, rc=%d\n",set_panel->name, rc);
+		}
+		mdelay(1);
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_RESET, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_COLOR_RESET cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_CT_EXIT, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_CT_EXIT cmds, rc=%d\n",set_panel->name, rc);
+		}
+		mdelay(18);
+		break;
+//#0265989 lishaokai_ext@smartisan.com begin 20180607 end
+	case 18:
+		is_eye_care_mode = 0;
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_COLOR_RESTORE, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_COLOR_RESTORE cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+//#0255410 lishaokai_ext@smartisan.com begin 20180517 begin
+	case 92:
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_WEAK_SRE, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_WEAK_SRE cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+	case 94:
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_MIDDLE_SRE, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_MIDDLE_SRE cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+	case 96:
+		rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_SET_STRONG_SRE, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_STRONG_SRE cmds, rc=%d\n",
+			       set_panel->name, rc);
+		}
+		break;
+//#0255410 lishaokai_ext@smartisan.com begin 20180517 end
+	case 110:
+		faceid_enable = 0;
+		break;
+	case 111:
+		faceid_enable = 1;
+		break;
+	case 178:
+//#0255410 lishaokai_ext@smartisan.com begin 20180517 begin
+		if (is_eye_care_mode == 1){
+			rc = dsi_panel_tx_cmd_set(set_panel,
+					DSI_CMD_SET_CLOSE_SRE_PAPERMODE, 0);
+			if (rc) {
+				pr_err("[%s] failed to send DSI_CMD_SET_CLOSE_SRE_PAPERMODE cmds, rc=%d\n",
+					set_panel->name, rc);
+			}
+		}else{
+			rc = dsi_panel_tx_cmd_set(set_panel,
+					DSI_CMD_SET_CLOSE_SRE_NORMALMODE, 0);
+			if (rc) {
+				pr_err("[%s] failed to send DSI_CMD_SET_CLOSE_SRE_NORMALMODE cmds, rc=%d\n",
+					set_panel->name, rc);
+			}
+		}
+//#0255410 lishaokai_ext@smartisan.com begin 20180517 endssss
+		break;
+	case 180:
+		dsi_panel_tx_cmd_set(set_panel, set_color_enable[1] + DSI_CMD_SET_MAX, set_color_enable[0]);
+		break;
+	case 190:
+		dsi_panel_tx_cmd_set(set_panel,DSI_CMD_HBM_ENABLE,0);
+		break;
+	case 191:
+		dsi_panel_tx_cmd_set(set_panel,DSI_CMD_HBM_DISABLE,0);
+		break;
+	case 200:
+		is_CGM_enable = 0;
+		dsi_panel_tx_cmd_set(set_panel,DSI_CMD_CGM_P3,0);
+		break;
+	case 201:
+		is_CGM_enable = 1;
+		dsi_panel_tx_cmd_set(set_panel,DSI_CMD_CGM_sRGB,0);
+		break;
+	case 202:
+		is_CGM_enable = 2;
+		dsi_panel_tx_cmd_set(set_panel,DSI_CMD_CGM_Native,0);
+		break;
+//0254819 bsp madan@smartisan.com add to support tp glove mode begin.
+	case 260:
+		if(true == if_use_focal_ic()) {
+			fts_enter_glove_mode(0);
+		} else if (false == if_use_focal_ic()) {
+			gt1x_enter_glove_mode(0);
+			goodix_glove_mode = 0;
+		} else {
+			pr_err("%s: invalid para(disable glove).\n", __func__);
+		}
+		break;
+	case 261:
+		if(true == if_use_focal_ic()) {
+			fts_enter_glove_mode(1);
+		} else if (false == if_use_focal_ic()) {
+			gt1x_enter_glove_mode(1);
+			goodix_glove_mode = 1;
+		} else {
+			pr_err("%s: invalid para(enable glove).\n", __func__);
+		}
+		break;
+//0254819 bsp madan@smartisan.com add to support tp glove mode end.
+
+//#0265177 madan@smartisan.com add begin.
+	case 280:
+		if(true == if_use_focal_ic()) {
+			fts_enter_slide_mode(0);
+		} else if (false == if_use_focal_ic()) {
+			pr_info("%s: this is saved for goodix ic.\n", __func__);
+		} else {
+			pr_err("%s: invalid para(disable glove).\n", __func__);
+		}
+		break;
+	case 281:
+		if(true == if_use_focal_ic()) {
+			fts_enter_slide_mode(1);
+		} else if (false == if_use_focal_ic()) {
+			pr_info("%s: this is saved for goodix ic.\n", __func__);
+		} else {
+			pr_err("%s: invalid para(enable glove).\n", __func__);
+		}
+		break;
+//#0265177 madan@smartisan.com add end.
+
+	default:
+		break;
+	}
+
+	return;
+}
+
+static int dsi_panel_parse_color_cmd(struct dsi_panel_cmd_set *cmd,
+					char *data,
+					u32 length)
+{
+	int rc;
+	u32 packet_count = 0;
+
+	rc = dsi_panel_get_cmd_pkt_count(data, length, &packet_count);
+	if (rc) {
+		pr_err("commands failed, rc=%d\n", rc);
+		goto error;
+	}
+
+	rc = dsi_panel_alloc_cmd_packets(cmd, packet_count);
+	if (rc) {
+		pr_err("failed to allocate cmd packets, rc=%d\n", rc);
+		goto error;
+	}
+
+	rc = dsi_panel_create_cmd_packets(data, length, packet_count,
+					  cmd->cmds);
+	if (rc) {
+		pr_err("failed to create cmd packets, rc=%d\n", rc);
+		goto error_free_mem;
+	}
+	cmd->state = DSI_CMD_SET_STATE_HS;
+
+	return rc;
+error_free_mem:
+	kfree(cmd->cmds);
+	cmd->cmds = NULL;
+error:
+	return rc;
+
+}
+
+//#0254432 madan@smartisan.com add for color temperature temp version begin.
+static ssize_t dsi_panel_parse_color_data(void)
+{
+	int rc = 0;
+//#0261410 lishaokai_ext@smartisan.com 201800601 begin
+	int i,j = 0;
+	for ( i = 0; i < CT_SIZE; i++ )
+		{
+			switch( i % 9 ){
+				case 0:
+					cool_data [i] = 0x15;
+					warm_data [i] = 0x15;
+					break;
+				case 1:
+					cool_data [i] = 0x01;
+					warm_data [i] = 0x01;
+					break;
+				case 2:
+					cool_data [i] = 0x00;
+					warm_data [i] = 0x00;
+					break;
+				case 3:
+					cool_data [i] = 0x00;
+					warm_data [i] = 0x00;
+					break;
+				case 4:
+					cool_data [i] = 0x00;
+					warm_data [i] = 0x00;
+					break;
+				case 5:
+					cool_data [i] = 0x00;
+					warm_data [i] = 0x00;
+					break;
+				case 6:
+					cool_data [i] = 0x02;
+					warm_data [i] = 0x02;
+					break;
+				case 7:
+					cool_data [i] = reg[ i / 9];
+					warm_data [i] = reg[ i / 9 ];
+					break;
+				default:
+					break;
+				}
+		}
+
+	do {
+		for (i = 0;i < CT_SIZE;i++){
+			if( i % 9 == 8)
+			{
+				cool_data [i] = cool_data_color[j][i / 9];
+				warm_data [i] = warm_data_color[j][i / 9];
+			}
+		}
+
+		rc = dsi_panel_parse_color_cmd(&warm_cmd[j], warm_data, CT_SIZE/*arry len*/);
+
+		if(rc < 0){
+			pr_err("%s:failed to set warm cmd\n", __func__);
+		}
+		rc = dsi_panel_parse_color_cmd(&cool_cmd[j], cool_data, CT_SIZE/*arry len*/);
+		if(rc < 0){
+			pr_err("%s:failed to set cool cmd\n", __func__);
+		}
+		j++;
+	}while(j< TOTAL_LEVEL);
+
+	return rc;
+}
+//#0261410 lishaokai_ext@smartisan.com 201800601 end
+
+
+static long color_panel_ioctl(struct file *file, unsigned int flags,
+						unsigned long value)
+{
+	int rc = 0;
+	pr_debug("%s:flags is %d, value is %ld\n", __func__, flags, value);
+	if(set_panel->panel_power_state == 0){
+		if(flags == SMARTISAN_IE_SET && value == 18){
+			is_eye_care_mode = 0;
+		}
+		if(flags == SMARTISAN_IE_SET && value == 10){
+			is_eye_care_mode = 1;
+		}
+		pr_err("%s:in power off state.\n", __func__);
+		return -EAGAIN;
+	}
+	switch (flags) {
+		case SMARTISAN_IE_SET:
+			dsi_panel_set_ie_level(value);
+			break;
+//#0261410 lishaokai_ext@smartisan.com 20180530 begin
+		case DSI_PANEL_RESET_PP:
+			is_color_mode = 0;
+//#0265989 lishaokai_ext@smartisan.com 201800607begin
+			dsi_panel_set_ie_level(14);
+//#0265989 lishaokai_ext@smartisan.com 20180607 end
+			break;
+		case DSI_PANEL_WARM_PP:
+			is_color_mode = 1;
+			set_color_enable[0] = 1;
+			set_color_enable[1] = value;
+			rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_CT_ENRER, 0);
+			if (rc) {
+				pr_err("[%s] failed to send DSI_CMD_CT_ENRER cmds, rc=%d\n",set_panel->name, rc);
+			}
+			mdelay(1);
+			dsi_panel_tx_cmd_set(set_panel, value + DSI_CMD_SET_MAX, 1);
+			rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_CT_EXIT, 0);
+			if (rc) {
+				pr_err("[%s] failed to send DSI_CMD_CT_EXIT cmds, rc=%d\n",set_panel->name, rc);
+			}
+			mdelay(18);
+			break;
+		case DSI_PANEL_COLD_PP:
+			is_color_mode = 1;
+			set_color_enable[0] = 0;
+			set_color_enable[1] = value;
+			rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_CT_ENRER, 0);
+			if (rc) {
+				pr_err("[%s] failed to send DSI_CMD_CT_ENRER cmds, rc=%d\n",set_panel->name, rc);
+			}
+			mdelay(1);
+			dsi_panel_tx_cmd_set(set_panel, value + DSI_CMD_SET_MAX, 0);
+			rc = dsi_panel_tx_cmd_set(set_panel, DSI_CMD_CT_EXIT, 0);
+			if (rc) {
+				pr_err("[%s] failed to send DSI_CMD_CT_EXIT cmds, rc=%d\n",set_panel->name, rc);
+			}
+			mdelay(18);
+
+			break;
+//#0261410 lishaokai_ext@smartisan.com 20180530 end
+		default:
+			break;
+	}
+	return 0;
+}
+
+static const struct file_operations color_panel_fops = {
+	.owner		= THIS_MODULE,
+	.unlocked_ioctl	= color_panel_ioctl,
+};
+
+static struct miscdevice color_panel_dev = {
+	MISC_DYNAMIC_MINOR,
+	"color_panel",
+	&color_panel_fops
+};
+
+static ssize_t mdss_mdp_show_blank_event(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	int ret;
+
+	pr_debug("panel_power_state = %d\n", panel_power_state);
+	ret = scnprintf(buf, PAGE_SIZE, "panel_power_on = %d\n",
+						panel_power_state);
+
+	return ret;
+}
+
+static ssize_t mdss_fb_set_ie_level(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t len)
+{
+	u32 ie_level;
+
+	if (sscanf(buf, "%d", &ie_level) != 1) {
+		pr_err("sccanf buf error!\n");
+		return len;
+	}
+
+	dsi_panel_set_ie_level(ie_level);
+
+	return len;
+}
+
+static ssize_t mdss_fb_get_ie_level(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	int ret;
+	int sre_mode = 1;
+
+	ret = scnprintf(buf, PAGE_SIZE, "%d\n", sre_mode);
+
+	return ret;
+}
+
+static DEVICE_ATTR(msm_fb_ie_level, S_IRUGO | S_IWUSR,
+	mdss_fb_get_ie_level, mdss_fb_set_ie_level);
+static DEVICE_ATTR(show_blank_event, S_IRUGO,
+	mdss_mdp_show_blank_event, NULL);
+
+static struct attribute *mdss_fb_attrs[] = {
+	&dev_attr_show_blank_event.attr,
+	&dev_attr_msm_fb_ie_level.attr,
+	NULL,
+};
+
+static struct attribute_group mdss_fb_attr_group = {
+	.attrs = mdss_fb_attrs,
+};
+//0249208 bsp madan@smartisan.com add to support eye protect mode end.
 
 int dsi_panel_drv_init(struct dsi_panel *panel,
 		       struct mipi_dsi_host *host)
@@ -2934,6 +3486,18 @@ int dsi_panel_drv_init(struct dsi_panel *panel,
 		goto error_gpio_release;
 	}
 
+	rc = sysfs_create_group(&(panel->parent->kobj), &mdss_fb_attr_group);
+	if (rc)
+		pr_err("sysfs group creation failed, rc=%d\n", rc);
+
+	dsi_panel_parse_color_data();
+
+	rc = misc_register(&color_panel_dev);
+	if (rc)
+		pr_err("[%s] failed to register misc device, rc=%d\n", panel->name, rc);
+	//0249208 bsp madan@smartisan.com add to support eye protect mode end.
+	//#0243874 bsp madan@smartisan.com add to show panel on/off state end.
+
 	goto exit;
 
 error_gpio_release:
@@ -2944,6 +3508,8 @@ error_vreg_put:
 	(void)dsi_panel_vreg_put(panel);
 exit:
 	mutex_unlock(&panel->panel_lock);
+	set_panel = panel;
+	panel->panel_power_state = 1;
 	return rc;
 }
 
@@ -3265,7 +3831,7 @@ int dsi_panel_update_pps(struct dsi_panel *panel)
 		goto error;
 	}
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PPS);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PPS, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_PPS cmds, rc=%d\n",
 			panel->name, rc);
@@ -3290,7 +3856,7 @@ int dsi_panel_set_lp1(struct dsi_panel *panel)
 		return 0;
 
 	mutex_lock(&panel->panel_lock);
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP1);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP1, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_LP1 cmd, rc=%d\n",
 		       panel->name, rc);
@@ -3311,7 +3877,7 @@ int dsi_panel_set_lp2(struct dsi_panel *panel)
 		return 0;
 
 	mutex_lock(&panel->panel_lock);
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP2);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP2, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_LP2 cmd, rc=%d\n",
 		       panel->name, rc);
@@ -3332,7 +3898,7 @@ int dsi_panel_set_nolp(struct dsi_panel *panel)
 		return 0;
 
 	mutex_lock(&panel->panel_lock);
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_NOLP cmd, rc=%d\n",
 		       panel->name, rc);
@@ -3363,7 +3929,7 @@ int dsi_panel_prepare(struct dsi_panel *panel)
 		}
 	}
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_ON);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_ON, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_PRE_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3480,8 +4046,11 @@ int dsi_panel_send_roi_dcs(struct dsi_panel *panel, int ctrl_idx,
 			roi->x, roi->y, roi->w, roi->h);
 
 	mutex_lock(&panel->panel_lock);
-
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ROI);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_ROI_RPEPARE, 0);
+	if (rc)
+		pr_err("[%s] failed to send DSI_CMD_ROI_RPEPARE cmds, rc=%d\n",
+				panel->name, rc);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ROI, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_ROI cmds, rc=%d\n",
 				panel->name, rc);
@@ -3507,7 +4076,7 @@ int dsi_panel_switch(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_TIMING_SWITCH);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_TIMING_SWITCH, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_TIMING_SWITCH cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3530,7 +4099,7 @@ int dsi_panel_post_switch(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_TIMING_SWITCH);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_TIMING_SWITCH, 0);
 	if (rc)
 		pr_err("[%s] failed to send DSI_CMD_SET_POST_TIMING_SWITCH cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3552,12 +4121,20 @@ int dsi_panel_enable(struct dsi_panel *panel)
 		return 0;
 
 	mutex_lock(&panel->panel_lock);
-
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ON);
-	if (rc) {
-		pr_err("[%s] failed to send DSI_CMD_SET_ON cmds, rc=%d\n",
-		       panel->name, rc);
+	if(select_display == 1){
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ON, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_ON cmds, rc=%d\n",
+			       panel->name, rc);
+		}
+	}else{
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ON_OLD, 0);
+		if (rc) {
+			pr_err("[%s] failed to send DSI_CMD_SET_ON_OLD cmds, rc=%d\n",
+			       panel->name, rc);
+		}
 	}
+
 	panel->panel_initialized = true;
 	mutex_unlock(&panel->panel_lock);
 	return rc;
@@ -3577,7 +4154,7 @@ int dsi_panel_post_enable(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_ON);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_ON, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_POST_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3602,7 +4179,7 @@ int dsi_panel_pre_disable(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_OFF);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_OFF, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_PRE_OFF cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3628,7 +4205,7 @@ int dsi_panel_disable(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_OFF);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_OFF, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_OFF cmds, rc=%d\n",
 		       panel->name, rc);
@@ -3655,7 +4232,7 @@ int dsi_panel_unprepare(struct dsi_panel *panel)
 
 	mutex_lock(&panel->panel_lock);
 
-	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_OFF);
+	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_OFF, 0);
 	if (rc) {
 		pr_err("[%s] failed to send DSI_CMD_SET_POST_OFF cmds, rc=%d\n",
 		       panel->name, rc);

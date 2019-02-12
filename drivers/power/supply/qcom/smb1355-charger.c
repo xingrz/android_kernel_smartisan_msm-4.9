@@ -633,6 +633,8 @@ static int smb1355_parallel_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_PARALLEL_FCC_MAX:
 		val->intval = chip->max_fcc;
 		break;
+	case POWER_SUPPLY_PROP_ONLINE:
+		return -EINVAL;
 	default:
 		pr_err_ratelimited("parallel psy get prop %d not supported\n",
 			prop);
