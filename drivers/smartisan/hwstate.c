@@ -59,11 +59,11 @@ static ssize_t hwstate_show(struct kobject *kobj, struct kobj_attribute *attr, c
 	case audio_receiver_l:
 	case audio_speaker_r:
 	{
-		unsigned int status;
-		status = max98927_get_i2c_states();
-		if ((i == audio_receiver_l && status & 0x1) || (i == audio_speaker_r && status & 0x2))
-			sprintf(hwstate[i].hwstate_buf, "ok");
-		else
+		// unsigned int status;
+		// status = max98927_get_i2c_states();
+		// if ((i == audio_receiver_l && status & 0x1) || (i == audio_speaker_r && status & 0x2))
+		// 	sprintf(hwstate[i].hwstate_buf, "ok");
+		// else
 			sprintf(hwstate[i].hwstate_buf, "fail");
 		break;
 	}
