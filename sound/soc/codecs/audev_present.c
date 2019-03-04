@@ -22,7 +22,7 @@ typedef struct
 static audev_pst_t *audev_pst = NULL;
 
 extern int debussy_get_presence(void);
-// extern int max98927_get_i2c_states(void);
+extern int max98927_get_i2c_states(void);
 
 static ssize_t igo_pst_read(struct file *file,
 				 char __user *user_buf, size_t count,
@@ -65,7 +65,7 @@ static ssize_t max98927_pst_read(struct file *file,
 	pr_info("%s enter\n", __func__);
 
 	channel = file->private_data;
-	status = 0;//max98927_get_i2c_states();
+	status = max98927_get_i2c_states();
 
 	if (channel == MAX98927_LEFT)
 		exist = status & 0x1;

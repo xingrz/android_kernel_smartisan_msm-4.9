@@ -53,7 +53,7 @@ obj-y				+= tty/
 obj-y				+= char/
 
 # For the Elus kernel driver
-# obj-y                           += elliptic/
+obj-y                           += elliptic/
 
 # iommu/ comes before gpu as gpu are using iommu controllers
 obj-$(CONFIG_IOMMU_SUPPORT)	+= iommu/

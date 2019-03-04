@@ -444,4 +444,4 @@ obj-n += intelligo_old/
 obj-y += intelligo_new/
 obj-n += ig1600.o
 obj-y += audev_present.o
-# obj-y += max98927.o
+obj-y += max98927.o
