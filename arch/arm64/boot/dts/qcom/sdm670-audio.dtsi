@@ -21,6 +21,9 @@
 &soc {
 	qcom,msm-audio-apr {
 		compatible = "qcom,msm-audio-apr";
+#ifdef CONFIG_VENDOR_SMARTISAN
+		qcom,subsys-name = "apr_adsp";
+#endif
 		msm_audio_apr_dummy {
 			compatible = "qcom,msm-audio-apr-dummy";
 		};
