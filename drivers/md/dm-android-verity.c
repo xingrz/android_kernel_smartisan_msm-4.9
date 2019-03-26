@@ -103,23 +103,17 @@ static inline bool default_verity_key_id(void)
 
 static inline bool is_eng(void)
 {
-	static const char typeeng[]  = "eng";
-
-	return !strncmp(buildvariant, typeeng, sizeof(typeeng));
+	return true;
 }
 
 static inline bool is_userdebug(void)
 {
-	static const char typeuserdebug[]  = "userdebug";
-
-	return !strncmp(buildvariant, typeuserdebug, sizeof(typeuserdebug));
+	return true;
 }
 
 static inline bool is_unlocked(void)
 {
-	static const char unlocked[] = "orange";
-
-	return !strncmp(verifiedbootstate, unlocked, sizeof(unlocked));
+	return true;
 }
 
 static int table_extract_mpi_array(struct public_key_signature *pks,
