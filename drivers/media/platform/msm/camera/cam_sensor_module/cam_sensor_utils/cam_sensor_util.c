@@ -21,7 +21,7 @@
 #define VALIDATE_VOLTAGE(min, max, config_val) ((config_val) && \
 	(config_val >= min) && (config_val <= max))
 
- struct i2c_settings_list*
+static struct i2c_settings_list*
 	cam_sensor_get_i2c_ptr(struct i2c_settings_array *i2c_reg_settings,
 		uint32_t size)
 {
@@ -714,7 +714,7 @@ int32_t cam_sensor_update_power_settings(void *cmd_buf,
 		rc = -ENOMEM;
 		goto free_power_settings;
 	}
-	CAM_ERR(CAM_SENSOR,"power settings:%p %p",power_info->power_setting,power_info->power_down_setting);
+
 	while (tot_size < cmd_length) {
 		if (cmm_hdr->cmd_type ==
 			CAMERA_SENSOR_CMD_TYPE_PWR_UP) {
@@ -1649,12 +1649,7 @@ int msm_camera_power_down(struct cam_sensor_power_ctrl_t *ctrl,
 		CAM_ERR(CAM_SENSOR, "failed ctrl %pK",  ctrl);
 		return -EINVAL;
 	}
-    #if 0
-        if(ctrl->cam_pinctrl_status == 0) {
-                CAM_ERR(CAM_SENSOR, "already power down");
-		return 0;
-        }
-    #endif
+
 	gpio_num_info = ctrl->gpio_num_info;
 	num_vreg = soc_info->num_rgltr;
 

@@ -29,12 +29,11 @@ int32_t cam_cci_i2c_read(struct cam_sensor_cci_client *cci_client,
 		|| data_type >= CAMERA_SENSOR_I2C_TYPE_MAX)
 		return rc;
 
-  (void)data_type;
 	cci_ctrl.cmd = MSM_CCI_I2C_READ;
 	cci_ctrl.cci_info = cci_client;
 	cci_ctrl.cfg.cci_i2c_read_cfg.addr = addr;
 	cci_ctrl.cfg.cci_i2c_read_cfg.addr_type = addr_type;
-	//cci_ctrl.cfg.cci_i2c_read_cfg.data_type = data_type;
+	cci_ctrl.cfg.cci_i2c_read_cfg.data_type = data_type;
 	cci_ctrl.cfg.cci_i2c_read_cfg.data = buf;
 	cci_ctrl.cfg.cci_i2c_read_cfg.num_byte = data_type;
 	rc = v4l2_subdev_call(cci_client->cci_subdev,
@@ -81,12 +80,11 @@ int32_t cam_camera_cci_i2c_read_seq(struct cam_sensor_cci_client *cci_client,
 	if (!buf)
 		return -ENOMEM;
 
-  (void)data_type;
 	cci_ctrl.cmd = MSM_CCI_I2C_READ;
 	cci_ctrl.cci_info = cci_client;
 	cci_ctrl.cfg.cci_i2c_read_cfg.addr = addr;
 	cci_ctrl.cfg.cci_i2c_read_cfg.addr_type = addr_type;
-	//cci_ctrl.cfg.cci_i2c_read_cfg.data_type = data_type;
+	cci_ctrl.cfg.cci_i2c_read_cfg.data_type = data_type;
 	cci_ctrl.cfg.cci_i2c_read_cfg.data = buf;
 	cci_ctrl.cfg.cci_i2c_read_cfg.num_byte = num_byte;
 	cci_ctrl.status = -EFAULT;

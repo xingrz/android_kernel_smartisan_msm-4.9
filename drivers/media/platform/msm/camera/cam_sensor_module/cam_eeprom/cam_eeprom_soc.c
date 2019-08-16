@@ -214,7 +214,6 @@ static int cam_eeprom_get_dt_data(struct cam_eeprom_ctrl_t *e_ctrl)
 	of_node = soc_info->dev->of_node;
 
 	if (e_ctrl->userspace_probe == false) {
-		CAM_ERR(CAM_EEPROM, "lily userspace_probe false");
 		rc = cam_get_dt_power_setting_data(of_node,
 			soc_info, power_info);
 		if (rc < 0) {
@@ -222,7 +221,6 @@ static int cam_eeprom_get_dt_data(struct cam_eeprom_ctrl_t *e_ctrl)
 			return rc;
 		}
 	}
-	CAM_ERR(CAM_EEPROM, "lily userspace_probe true");
 
 	if (!soc_info->gpio_data) {
 		CAM_INFO(CAM_EEPROM, "No GPIO found");
