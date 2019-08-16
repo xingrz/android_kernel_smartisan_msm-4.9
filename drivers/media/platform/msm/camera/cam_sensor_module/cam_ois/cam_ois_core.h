@@ -12,6 +12,11 @@
 #ifndef _CAM_OIS_CORE_H_
 #define _CAM_OIS_CORE_H_
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+#include <linux/cma.h>
+#include <linux/dma-contiguous.h>
+#endif
+
 #include "cam_ois_dev.h"
 
 /**
