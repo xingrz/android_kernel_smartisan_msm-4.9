@@ -21,7 +21,11 @@
 #define VALIDATE_VOLTAGE(min, max, config_val) ((config_val) && \
 	(config_val >= min) && (config_val <= max))
 
+#ifdef CONFIG_VENDOR_SMARTISAN
+struct i2c_settings_list*
+#else
 static struct i2c_settings_list*
+#endif
 	cam_sensor_get_i2c_ptr(struct i2c_settings_array *i2c_reg_settings,
 		uint32_t size)
 {
