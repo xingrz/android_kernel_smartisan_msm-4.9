@@ -106,6 +106,7 @@ struct cam_vfe_bus_ver2_common_data {
 	struct cam_vfe_bus_irq_evt_payload          evt_payload[
 		CAM_VFE_BUS_VER2_PAYLOAD_MAX];
 	struct list_head                            free_payload_list;
+	spinlock_t                                  spin_lock;
 	struct mutex                                bus_mutex;
 	uint32_t                                    secure_mode;
 	uint32_t                                    num_sec_out;
@@ -214,16 +215,23 @@ static int cam_vfe_bus_get_evt_payload(
 	struct cam_vfe_bus_ver2_common_data  *common_data,
 	struct cam_vfe_bus_irq_evt_payload  **evt_payload)
 {
+	int rc;
+
+	spin_lock(&common_data->spin_lock);
 	if (list_empty(&common_data->free_payload_list)) {
 		*evt_payload = NULL;
 		CAM_ERR_RATE_LIMIT(CAM_ISP, "No free payload");
-		return -ENODEV;
+		rc = -ENODEV;
+		goto done;
 	}
 
 	*evt_payload = list_first_entry(&common_data->free_payload_list,
 		struct cam_vfe_bus_irq_evt_payload, list);
 	list_del_init(&(*evt_payload)->list);
-	return 0;
+	rc = 0;
+done:
+	spin_unlock(&common_data->spin_lock);
+	return rc;
 }
 
 static enum cam_vfe_bus_comp_grp_id
@@ -254,6 +262,7 @@ static int cam_vfe_bus_put_evt_payload(void     *core_info,
 	struct cam_vfe_bus_ver2_common_data *common_data = NULL;
 	uint32_t  *ife_irq_regs = NULL;
 	uint32_t   status_reg0, status_reg1, status_reg2;
+	unsigned long flags;
 
 	if (!core_info) {
 		CAM_ERR(CAM_ISP, "Invalid param core_info NULL");
@@ -276,11 +285,14 @@ static int cam_vfe_bus_put_evt_payload(void     *core_info,
 	}
 
 	common_data = core_info;
+
+	spin_lock_irqsave(&common_data->spin_lock, flags);
 	list_add_tail(&(*evt_payload)->list,
 		&common_data->free_payload_list);
+	spin_unlock_irqrestore(&common_data->spin_lock, flags);
+
 	*evt_payload = NULL;
 
-	CAM_DBG(CAM_ISP, "Done");
 	return 0;
 }
 
@@ -2320,8 +2332,7 @@ static int cam_vfe_bus_error_irq_top_half(uint32_t evt_id,
 
 	CAM_ERR_RATE_LIMIT(CAM_ISP, "Bus Err IRQ");
 	for (i = 0; i < th_payload->num_registers; i++) {
-		CAM_ERR_RATE_LIMIT(CAM_ISP, "vfe:%d: IRQ_Status%d: 0x%x",
-		bus_priv->common_data.core_index, i,
+		CAM_ERR_RATE_LIMIT(CAM_ISP, "IRQ_Status%d: 0x%x", i,
 			th_payload->evt_status_arr[i]);
 	}
 	cam_irq_controller_disable_irq(bus_priv->common_data.bus_irq_controller,
@@ -2831,32 +2842,29 @@ static int cam_vfe_bus_deinit_hw(void *hw_priv,
 	void *deinit_hw_args, uint32_t arg_size)
 {
 	struct cam_vfe_bus_ver2_priv    *bus_priv = hw_priv;
-	int                              rc = 0;
+	int                              rc;
 
-	if (!bus_priv) {
+	if (!bus_priv || (bus_priv->irq_handle <= 0) ||
+		(bus_priv->error_irq_handle <= 0)) {
 		CAM_ERR(CAM_ISP, "Error: Invalid args");
 		return -EINVAL;
 	}
 
-	if (bus_priv->error_irq_handle) {
-		rc = cam_irq_controller_unsubscribe_irq(
-			bus_priv->common_data.bus_irq_controller,
-			bus_priv->error_irq_handle);
-		if (rc)
-			CAM_ERR(CAM_ISP, "Failed to unsubscribe error irq rc=%d", rc);
+	rc = cam_irq_controller_unsubscribe_irq(
+		bus_priv->common_data.bus_irq_controller,
+		bus_priv->error_irq_handle);
+	if (rc)
+		CAM_ERR(CAM_ISP, "Failed to unsubscribe error irq rc=%d", rc);
 
-		bus_priv->error_irq_handle = 0;
-	}
+	bus_priv->error_irq_handle = 0;
 
-	if (bus_priv->irq_handle) {
-		rc = cam_irq_controller_unsubscribe_irq(
-			bus_priv->common_data.vfe_irq_controller,
-			bus_priv->irq_handle);
-		if (rc)
-			CAM_ERR(CAM_ISP, "Failed to unsubscribe irq rc=%d", rc);
+	rc = cam_irq_controller_unsubscribe_irq(
+		bus_priv->common_data.vfe_irq_controller,
+		bus_priv->irq_handle);
+	if (rc)
+		CAM_ERR(CAM_ISP, "Failed to unsubscribe irq rc=%d", rc);
 
-		bus_priv->irq_handle = 0;
-	}
+	bus_priv->irq_handle = 0;
 
 	return rc;
 }
@@ -2993,6 +3001,7 @@ int cam_vfe_bus_ver2_init(
 		}
 	}
 
+	spin_lock_init(&bus_priv->common_data.spin_lock);
 	INIT_LIST_HEAD(&bus_priv->common_data.free_payload_list);
 	for (i = 0; i < CAM_VFE_BUS_VER2_PAYLOAD_MAX; i++) {
 		INIT_LIST_HEAD(&bus_priv->common_data.evt_payload[i].list);

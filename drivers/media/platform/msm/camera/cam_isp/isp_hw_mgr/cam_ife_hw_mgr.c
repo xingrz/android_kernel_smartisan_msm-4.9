@@ -1427,7 +1427,7 @@ static int cam_ife_mgr_acquire_hw(void *hw_mgr_priv,
 	}
 
 	acquire_args->ctxt_to_hw_map = ife_ctx;
-	ife_ctx->ctx_state = CAM_IFE_HW_MGR_CTX_ACQUIRED;
+	ife_ctx->ctx_in_use = 1;
 
 	cam_ife_hw_mgr_put_ctx(&ife_hw_mgr->used_ctx_list, &ife_ctx);
 
@@ -1549,7 +1549,7 @@ static int cam_ife_mgr_config_hw(void *hw_mgr_priv,
 		return -EPERM;
 	}
 
-	if ((ctx->ctx_state < CAM_IFE_HW_MGR_CTX_ACQUIRED) || !ctx->cdm_cmd) {
+	if (!ctx->ctx_in_use || !ctx->cdm_cmd) {
 		CAM_ERR(CAM_ISP, "Invalid context parameters");
 		return -EPERM;
 	}
@@ -1611,7 +1611,7 @@ static int cam_ife_mgr_stop_hw_in_overflow(void *stop_hw_args)
 		return -EINVAL;
 	}
 	ctx = (struct cam_ife_hw_mgr_ctx *)stop_args->ctxt_to_hw_map;
-	if (!ctx || (ctx->ctx_state < CAM_IFE_HW_MGR_CTX_STARTED)) {
+	if (!ctx || !ctx->ctx_in_use) {
 		CAM_ERR(CAM_ISP, "Invalid context is used");
 		return -EPERM;
 	}
@@ -1673,7 +1673,6 @@ static int cam_ife_mgr_stop_hw_in_overflow(void *stop_hw_args)
 
 	/* Stop tasklet for context */
 	cam_tasklet_stop(ctx->common.tasklet_info);
-	ctx->ctx_state = CAM_IFE_HW_MGR_CTX_STOPPED;
 	CAM_DBG(CAM_ISP, "Exit...ctx id:%d rc :%d",
 		ctx->ctx_index, rc);
 
@@ -1695,18 +1694,13 @@ static int cam_ife_mgr_stop_hw(void *hw_mgr_priv, void *stop_hw_args)
 		return -EINVAL;
 	}
 	ctx = (struct cam_ife_hw_mgr_ctx *)stop_args->ctxt_to_hw_map;
-	if (!ctx || (ctx->ctx_state < CAM_IFE_HW_MGR_CTX_STARTED)) {
+	if (!ctx || !ctx->ctx_in_use) {
 		CAM_ERR(CAM_ISP, "Invalid context is used");
 		return -EPERM;
 	}
 
-	CAM_DBG(CAM_ISP, " Enter...ctx id:%d", ctx->ctx_index);
-
-	/* Set the csid halt command */
-	if (!stop_args->args || (ctx->ctx_state == CAM_IFE_HW_MGR_CTX_PAUSED))
-		csid_halt_type = CAM_CSID_HALT_IMMEDIATELY;
-	else
-		csid_halt_type = CAM_CSID_HALT_AT_FRAME_BOUNDARY;
+	CAM_DBG(CAM_ISP, " Enter...ctx id:%d",
+		ctx->ctx_index);
 
 	/* Set the csid halt command */
 	if (!stop_args->args)
@@ -1799,7 +1793,6 @@ static int cam_ife_mgr_stop_hw(void *hw_mgr_priv, void *stop_hw_args)
 	for (i = 0; i < CAM_IFE_HW_OUT_RES_MAX; i++)
 		cam_ife_hw_mgr_deinit_hw_res(&ctx->res_list_ife_out[i]);
 
-	ctx->ctx_state = CAM_IFE_HW_MGR_CTX_STOPPED;
 	CAM_DBG(CAM_ISP, "Exit...ctx id:%d rc :%d", ctx->ctx_index, rc);
 
 	mutex_lock(&g_ife_hw_mgr.ctx_mutex);
@@ -1858,7 +1851,7 @@ static int cam_ife_mgr_restart_hw(void *start_hw_args)
 	}
 
 	ctx = (struct cam_ife_hw_mgr_ctx *)start_args->ctxt_to_hw_map;
-	if (!ctx || (ctx->ctx_state < CAM_IFE_HW_MGR_CTX_ACQUIRED)) {
+	if (!ctx || !ctx->ctx_in_use) {
 		CAM_ERR(CAM_ISP, "Invalid context is used");
 		return -EPERM;
 	}
@@ -1900,7 +1893,6 @@ static int cam_ife_mgr_restart_hw(void *start_hw_args)
 	}
 
 	CAM_DBG(CAM_ISP, "START CID SRC ... in ctx id:%d", ctx->ctx_index);
-	ctx->ctx_state = CAM_IFE_HW_MGR_CTX_STARTED;
 	/* Start IFE root node: do nothing */
 	CAM_DBG(CAM_ISP, "Exit...(success)");
 	return 0;
@@ -1925,7 +1917,7 @@ static int cam_ife_mgr_start_hw(void *hw_mgr_priv, void *start_hw_args)
 	}
 
 	ctx = (struct cam_ife_hw_mgr_ctx *)start_args->ctxt_to_hw_map;
-	if (!ctx || (ctx->ctx_state < CAM_IFE_HW_MGR_CTX_ACQUIRED)) {
+	if (!ctx || !ctx->ctx_in_use) {
 		CAM_ERR(CAM_ISP, "Invalid context is used");
 		return -EPERM;
 	}
@@ -2075,7 +2067,6 @@ static int cam_ife_mgr_start_hw(void *hw_mgr_priv, void *start_hw_args)
 			goto err;
 		}
 	}
-	ctx->ctx_state = CAM_IFE_HW_MGR_CTX_STARTED;
 
 	/* Start IFE root node: do nothing */
 	CAM_DBG(CAM_ISP, "Exit...(success)");
@@ -2111,7 +2102,7 @@ static int cam_ife_mgr_release_hw(void *hw_mgr_priv,
 	}
 
 	ctx = (struct cam_ife_hw_mgr_ctx *)release_args->ctxt_to_hw_map;
-	if (!ctx || (ctx->ctx_state < CAM_IFE_HW_MGR_CTX_ACQUIRED)) {
+	if (!ctx || !ctx->ctx_in_use) {
 		CAM_ERR(CAM_ISP, "Invalid context is used");
 		return -EPERM;
 	}
@@ -2131,7 +2122,7 @@ static int cam_ife_mgr_release_hw(void *hw_mgr_priv,
 
 	/* clean context */
 	list_del_init(&ctx->list);
-	ctx->ctx_state = CAM_IFE_HW_MGR_CTX_AVAILABLE;
+	ctx->ctx_in_use = 0;
 	ctx->is_rdi_only_context = 0;
 	ctx->cdm_handle = 0;
 	ctx->cdm_ops = NULL;
@@ -2597,7 +2588,7 @@ static int cam_ife_mgr_cmd(void *hw_mgr_priv, void *cmd_args)
 	}
 
 	ctx = (struct cam_ife_hw_mgr_ctx *)hw_cmd_args->ctxt_to_hw_map;
-	if (!ctx || (ctx->ctx_state < CAM_IFE_HW_MGR_CTX_ACQUIRED)) {
+	if (!ctx || !ctx->ctx_in_use) {
 		CAM_ERR(CAM_ISP, "Fatal: Invalid context is used");
 		return -EPERM;
 	}
@@ -2612,11 +2603,9 @@ static int cam_ife_mgr_cmd(void *hw_mgr_priv, void *cmd_args)
 		break;
 	case CAM_ISP_HW_MGR_CMD_PAUSE_HW:
 		cam_ife_mgr_pause_hw(ctx);
-		ctx->ctx_state = CAM_IFE_HW_MGR_CTX_PAUSED;
 		break;
 	case CAM_ISP_HW_MGR_CMD_RESUME_HW:
 		cam_ife_mgr_resume_hw(ctx);
-		ctx->ctx_state = CAM_IFE_HW_MGR_CTX_STARTED;
 		break;
 	default:
 		CAM_ERR(CAM_ISP, "Invalid HW mgr command:0x%x",
@@ -3007,7 +2996,7 @@ static int  cam_ife_hw_mgr_handle_camif_error(
 	void                              *handler_priv,
 	void                              *payload)
 {
-	int32_t  error_status;
+	int32_t  error_status = CAM_ISP_HW_ERROR_NONE;
 	uint32_t core_idx;
 	struct cam_ife_hw_mgr_ctx               *ife_hwr_mgr_ctx;
 	struct cam_vfe_top_irq_evt_payload      *evt_payload;
@@ -3025,9 +3014,9 @@ static int  cam_ife_hw_mgr_handle_camif_error(
 		return error_status;
 
 	switch (error_status) {
-	case CAM_VFE_IRQ_STATUS_OVERFLOW:
-	case CAM_VFE_IRQ_STATUS_P2I_ERROR:
-	case CAM_VFE_IRQ_STATUS_VIOLATION:
+	case CAM_ISP_HW_ERROR_OVERFLOW:
+	case CAM_ISP_HW_ERROR_P2I_ERROR:
+	case CAM_ISP_HW_ERROR_VIOLATION:
 		CAM_DBG(CAM_ISP, "Enter: error_type (%d)", error_status);
 
 		error_event_data.error_type =
@@ -3111,15 +3100,6 @@ static int cam_ife_hw_mgr_handle_reg_update(
 				rup_status = hw_res->bottom_half_handler(
 					hw_res, evt_payload);
 			}
-
-			if (ife_src_res->is_dual_vfe) {
-				hw_res = ife_src_res->hw_res[0];
-				if (core_idx == hw_res->hw_intf->hw_idx) {
-					hw_res->bottom_half_handler(
-						hw_res, evt_payload);
-				}
-			}
-
 			if (atomic_read(&ife_hwr_mgr_ctx->overflow_pending))
 				break;
 
@@ -3135,6 +3115,13 @@ static int cam_ife_hw_mgr_handle_reg_update(
 		case CAM_ISP_HW_VFE_IN_RDI1:
 		case CAM_ISP_HW_VFE_IN_RDI2:
 		case CAM_ISP_HW_VFE_IN_RDI3:
+			if (!ife_hwr_mgr_ctx->is_rdi_only_context)
+				continue;
+
+			/*
+			 * This is RDI only context, send Reg update and epoch
+			 * HW event to cam context
+			 */
 			hw_res = ife_src_res->hw_res[0];
 
 			if (!hw_res) {
@@ -3145,9 +3132,6 @@ static int cam_ife_hw_mgr_handle_reg_update(
 			if (core_idx == hw_res->hw_intf->hw_idx)
 				rup_status = hw_res->bottom_half_handler(
 					hw_res, evt_payload);
-
-			if (!ife_hwr_mgr_ctx->is_rdi_only_context)
-				continue;
 
 			if (atomic_read(&ife_hwr_mgr_ctx->overflow_pending))
 				break;
@@ -3350,6 +3334,8 @@ static int cam_ife_hw_mgr_process_camif_sof(
 	struct cam_ife_hw_mgr_ctx            *ife_hwr_mgr_ctx,
 	struct cam_vfe_top_irq_evt_payload   *evt_payload)
 {
+	struct cam_isp_hw_sof_event_data      sof_done_event_data;
+	cam_hw_event_cb_func                  ife_hwr_irq_sof_cb;
 	struct cam_isp_resource_node         *hw_res_l = NULL;
 	struct cam_isp_resource_node         *hw_res_r = NULL;
 	int32_t rc = -EINVAL;
@@ -3364,6 +3350,9 @@ static int cam_ife_hw_mgr_process_camif_sof(
 	hw_res_r = isp_ife_camif_res->hw_res[1];
 	CAM_DBG(CAM_ISP, "is_dual_vfe ? = %d",
 		isp_ife_camif_res->is_dual_vfe);
+
+	ife_hwr_irq_sof_cb =
+		ife_hwr_mgr_ctx->common.event_cb[CAM_ISP_HW_EVENT_SOF];
 
 	switch (isp_ife_camif_res->is_dual_vfe) {
 	/* Handling Single VFE Scenario */
@@ -3381,8 +3370,16 @@ static int cam_ife_hw_mgr_process_camif_sof(
 				evt_payload);
 			if (atomic_read(&ife_hwr_mgr_ctx->overflow_pending))
 				break;
-			if (!sof_status)
-				rc = 0;
+			if (!sof_status) {
+				cam_ife_mgr_cmd_get_sof_timestamp(
+					ife_hwr_mgr_ctx,
+					&sof_done_event_data.timestamp);
+
+				ife_hwr_irq_sof_cb(
+					ife_hwr_mgr_ctx->common.cb_priv,
+					CAM_ISP_HW_EVENT_SOF,
+					&sof_done_event_data);
+			}
 		}
 
 		break;
@@ -3434,6 +3431,15 @@ static int cam_ife_hw_mgr_process_camif_sof(
 		rc = cam_ife_hw_mgr_check_irq_for_dual_vfe(ife_hwr_mgr_ctx,
 			core_index0, core_index1, evt_payload->evt_id);
 
+		if (!rc) {
+			cam_ife_mgr_cmd_get_sof_timestamp(
+					ife_hwr_mgr_ctx,
+					&sof_done_event_data.timestamp);
+
+			ife_hwr_irq_sof_cb(ife_hwr_mgr_ctx->common.cb_priv,
+				CAM_ISP_HW_EVENT_SOF, &sof_done_event_data);
+		}
+
 		break;
 
 	default:
@@ -3443,13 +3449,14 @@ static int cam_ife_hw_mgr_process_camif_sof(
 
 	CAM_DBG(CAM_ISP, "Exit (sof_status = %d)", sof_status);
 
-	return rc;
+	return 0;
 }
 
 static int cam_ife_hw_mgr_handle_sof(
 	void                              *handler_priv,
 	void                              *payload)
 {
+	int32_t rc = -EINVAL;
 	struct cam_isp_resource_node         *hw_res = NULL;
 	struct cam_ife_hw_mgr_ctx            *ife_hw_mgr_ctx;
 	struct cam_vfe_top_irq_evt_payload   *evt_payload;
@@ -3457,7 +3464,6 @@ static int cam_ife_hw_mgr_handle_sof(
 	cam_hw_event_cb_func                  ife_hw_irq_sof_cb;
 	struct cam_isp_hw_sof_event_data      sof_done_event_data;
 	uint32_t  sof_status = 0;
-	bool sof_sent = false;
 
 	CAM_DBG(CAM_ISP, "Enter");
 
@@ -3483,13 +3489,13 @@ static int cam_ife_hw_mgr_handle_sof(
 		case CAM_ISP_HW_VFE_IN_RDI1:
 		case CAM_ISP_HW_VFE_IN_RDI2:
 		case CAM_ISP_HW_VFE_IN_RDI3:
-			hw_res = ife_src_res->hw_res[0];
-			sof_status = hw_res->bottom_half_handler(
-				hw_res, evt_payload);
-
 			/* check if it is rdi only context */
 			if (ife_hw_mgr_ctx->is_rdi_only_context) {
-				if (!sof_status && !sof_sent) {
+				hw_res = ife_src_res->hw_res[0];
+				sof_status = hw_res->bottom_half_handler(
+					hw_res, evt_payload);
+
+				if (!sof_status) {
 					cam_ife_mgr_cmd_get_sof_timestamp(
 						ife_hw_mgr_ctx,
 						&sof_done_event_data.timestamp);
@@ -3500,30 +3506,16 @@ static int cam_ife_hw_mgr_handle_sof(
 						&sof_done_event_data);
 					CAM_DBG(CAM_ISP, "sof_status = %d",
 						sof_status);
-
-					sof_sent = true;
 				}
 
+				/* this is RDI only context so exit from here */
+				return 0;
 			}
 			break;
 
 		case CAM_ISP_HW_VFE_IN_CAMIF:
-			sof_status = cam_ife_hw_mgr_process_camif_sof(
-				ife_src_res, ife_hw_mgr_ctx, evt_payload);
-			if (!sof_status && !sof_sent) {
-				cam_ife_mgr_cmd_get_sof_timestamp(
-					ife_hw_mgr_ctx,
-					&sof_done_event_data.timestamp);
-
-				ife_hw_irq_sof_cb(
-					ife_hw_mgr_ctx->common.cb_priv,
-					CAM_ISP_HW_EVENT_SOF,
-					&sof_done_event_data);
-				CAM_DBG(CAM_ISP, "sof_status = %d",
-					sof_status);
-
-				sof_sent = true;
-			}
+			rc = cam_ife_hw_mgr_process_camif_sof(ife_src_res,
+				ife_hw_mgr_ctx, evt_payload);
 			break;
 		default:
 			CAM_ERR(CAM_ISP, "Invalid resource id :%d",
@@ -3835,10 +3827,13 @@ int cam_ife_mgr_do_tasklet(void *handler_priv, void *evt_payload_priv)
 	struct cam_vfe_top_irq_evt_payload   *evt_payload;
 	int rc = -EINVAL;
 
-	if (!handler_priv || !evt_payload_priv)
+	if (!evt_payload_priv)
 		return rc;
 
 	evt_payload = evt_payload_priv;
+	if (!handler_priv)
+		goto put_payload;
+
 	ife_hwr_mgr_ctx = (struct cam_ife_hw_mgr_ctx *)handler_priv;
 
 	CAM_DBG(CAM_ISP, "addr of evt_payload = %pK core_index:%d",
@@ -3866,7 +3861,7 @@ int cam_ife_mgr_do_tasklet(void *handler_priv, void *evt_payload_priv)
 	if (rc) {
 		CAM_ERR(CAM_ISP, "Encountered Error (%d), ignoring other irqs",
 			 rc);
-		return IRQ_HANDLED;
+		goto put_payload;
 	}
 
 	CAM_DBG(CAM_ISP, "Calling EOF");
@@ -3888,6 +3883,8 @@ int cam_ife_mgr_do_tasklet(void *handler_priv, void *evt_payload_priv)
 	cam_ife_hw_mgr_handle_epoch_for_camif_hw_res(ife_hwr_mgr_ctx,
 		evt_payload_priv);
 
+put_payload:
+	cam_vfe_put_evt_payload(evt_payload->core_info, &evt_payload);
 	return IRQ_HANDLED;
 }
 
@@ -4119,8 +4116,6 @@ int cam_ife_hw_mgr_init(struct cam_hw_mgr_intf *hw_mgr_intf)
 		g_ife_hw_mgr.ctx_pool[i].common.tasklet_info =
 			g_ife_hw_mgr.mgr_common.tasklet_pool[i];
 
-		g_ife_hw_mgr.ctx_pool[i].ctx_state =
-			CAM_IFE_HW_MGR_CTX_AVAILABLE;
 		list_add_tail(&g_ife_hw_mgr.ctx_pool[i].list,
 			&g_ife_hw_mgr.free_ctx_list);
 	}

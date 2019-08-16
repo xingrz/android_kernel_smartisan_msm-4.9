@@ -492,8 +492,7 @@ int32_t cam_context_flush_ctx_to_hw(struct cam_context *ctx)
 	uint32_t i;
 	int rc = 0;
 
-	CAM_DBG(CAM_CTXT, "[%s][%d] E: NRT flush ctx",
-		ctx->dev_name, ctx->ctx_id);
+	CAM_DBG(CAM_CTXT, "[%s] E: NRT flush ctx", ctx->dev_name);
 
 	/*
 	 * flush pending requests, take the sync lock to synchronize with the
